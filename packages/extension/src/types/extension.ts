@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   wsPort: 8765,
   batchIntervalMs: 1000,
   screenshotIntervalMs: 5000,
-  dashboardUrl: 'http://localhost:3000',
+  dashboardUrl: 'http://localhost:4444',
 }
 
 // ---------------------------------------------------------------------------

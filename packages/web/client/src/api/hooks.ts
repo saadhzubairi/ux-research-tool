@@ -43,11 +43,11 @@ export function useHeatmapQuery(sessionId: string, url?: string) {
     queryKey: ['heatmap', sessionId, url],
     queryFn: () =>
       api
-        .get<ApiResponse<HeatmapData>>(`/api/sessions/${sessionId}/heatmap`, {
+        .get<ApiResponse<HeatmapData>>(`/api/heatmap/${sessionId}`, {
           params: { url },
         })
         .then((r) => r.data),
-    enabled: !!sessionId,
+    enabled: !!sessionId && !!url,
   })
 }
 

@@ -59,7 +59,7 @@ export function useServerReachable(port: number) {
   useEffect(() => {
     const check = async () => {
       try {
-        const res = await fetch(`http://localhost:${port === 8765 ? 3000 : port}/api/status`, {
+        const res = await fetch(`http://localhost:${port === 8765 ? 4444 : port}/api/status`, {
           method: 'GET',
           signal: AbortSignal.timeout(2000),
         })

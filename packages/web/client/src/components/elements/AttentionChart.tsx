@@ -97,34 +97,34 @@ export default function AttentionChart({ elements }: AttentionChartProps) {
           >
             <CartesianGrid
               strokeDasharray="3 3"
-              stroke="#334155"
+              stroke="#2a2a2a"
               horizontal={false}
             />
             <XAxis
               type="number"
-              tick={{ fill: '#94a3b8', fontSize: 11 }}
-              axisLine={{ stroke: '#475569' }}
-              tickLine={{ stroke: '#475569' }}
+              tick={{ fill: '#737373', fontSize: 11 }}
+              axisLine={{ stroke: '#3a3a3a' }}
+              tickLine={{ stroke: '#3a3a3a' }}
               label={{
                 value: 'Dwell Time (s)',
                 position: 'insideBottom',
                 offset: -2,
-                style: { fill: '#64748b', fontSize: 11 },
+                style: { fill: '#525252', fontSize: 11 },
               }}
             />
             <YAxis
               dataKey="label"
               type="category"
               width={180}
-              tick={{ fill: '#cbd5e1', fontSize: 10, fontFamily: 'monospace' }}
-              axisLine={{ stroke: '#475569' }}
+              tick={{ fill: '#a3a3a3', fontSize: 10, fontFamily: 'monospace' }}
+              axisLine={{ stroke: '#3a3a3a' }}
               tickLine={false}
             />
             <Tooltip
               content={<ChartTooltip />}
               cursor={{ fill: 'rgba(99, 102, 241, 0.1)' }}
             />
-            <Bar dataKey="dwellSec" radius={[0, 4, 4, 0]} barSize={20}>
+            <Bar dataKey="dwellSec" radius={0} barSize={20}>
               {chartData.map((_, index) => (
                 <Cell
                   key={`cell-${index}`}

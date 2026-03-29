@@ -138,9 +138,9 @@ export default function ElementTable({ elements, isLoading }: ElementTableProps)
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 bg-surface-700 rounded-full overflow-hidden max-w-[100px]">
+                  <div className="flex-1 h-1.5 bg-surface-700 overflow-hidden max-w-[100px]">
                     <div
-                      className="h-full bg-accent-500 rounded-full"
+                      className="h-full bg-accent-500"
                       style={{ width: `${Math.min(el.percentOfTotalDwell, 100)}%` }}
                     />
                   </div>

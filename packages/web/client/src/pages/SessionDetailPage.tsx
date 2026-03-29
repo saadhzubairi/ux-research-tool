@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useSessionQuery,
@@ -43,6 +43,12 @@ export default function SessionDetailPage() {
 
   const pageUrls = session?.pages.map((p) => p.url) ?? []
   const uniqueUrls = [...new Set(pageUrls)]
+
+  useEffect(() => {
+    if (!heatmapUrl && uniqueUrls.length > 0) {
+      setHeatmapUrl(uniqueUrls[0]!)
+    }
+  }, [uniqueUrls.length])
 
   const handleDelete = useCallback(() => {
     deleteSession.mutate(sessionId, {
@@ -204,7 +210,7 @@ function OverviewTab({ session }: { session: NonNullable<ReturnType<typeof useSe
                 <path
                   d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   fill="none"
-                  stroke="#334155"
+                  stroke="#2a2a2a"
                   strokeWidth="3"
                 />
                 <path

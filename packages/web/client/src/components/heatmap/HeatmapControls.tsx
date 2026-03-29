@@ -83,12 +83,12 @@ export default function HeatmapControls({
         <label className="text-xs text-surface-400">Show Fixations Only</label>
         <button
           onClick={onToggleFixations}
-          className={`relative w-10 h-5 rounded-full transition-colors ${
+          className={`relative w-10 h-5 transition-colors ${
             showFixations ? 'bg-accent-600' : 'bg-surface-600'
           }`}
         >
           <span
-            className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+            className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white transition-transform ${
               showFixations ? 'translate-x-5' : 'translate-x-0'
             }`}
           />

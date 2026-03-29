@@ -36,8 +36,8 @@ export default function TopBar() {
 
       <div className="flex items-center gap-4">
         {activeSessionId && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-green-900/30 border border-green-800/50 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+          <div className="flex items-center gap-2 px-3 py-1 bg-green-900/30 border border-green-800/50">
+            <span className="w-2 h-2 bg-green-400 animate-pulse" />
             <span className="text-xs text-green-400 font-medium">
               Tracking Active
             </span>

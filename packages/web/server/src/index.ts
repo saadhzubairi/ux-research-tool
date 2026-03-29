@@ -16,7 +16,7 @@ async function main() {
 
   const app = express()
 
-  app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:3000'] }))
+  app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:4444'] }))
   app.use(express.json({ limit: '10mb' }))
   if (config.nodeEnv === 'development') app.use(morgan('dev'))
 

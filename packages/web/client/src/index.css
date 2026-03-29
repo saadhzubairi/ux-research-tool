@@ -10,7 +10,7 @@
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: #334155 #0f172a;
+    scrollbar-color: #2a2a2a #000000;
   }
 
   *::-webkit-scrollbar {
@@ -19,22 +19,21 @@
   }
 
   *::-webkit-scrollbar-track {
-    background: #0f172a;
+    background: #000000;
   }
 
   *::-webkit-scrollbar-thumb {
-    background: #334155;
-    border-radius: 3px;
+    background: #2a2a2a;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+    background: #3a3a3a;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-surface-900 border border-surface-700 rounded-lg p-4;
+    @apply bg-surface-900 border border-surface-700 p-4;
   }
 
   .card-header {
@@ -42,7 +41,7 @@
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-surface-900 disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-surface-900 disabled:opacity-50 disabled:pointer-events-none;
   }
 
   .btn-primary {
@@ -62,7 +61,7 @@
   }
 
   .input {
-    @apply w-full bg-surface-800 border border-surface-600 rounded-md px-3 py-2 text-sm text-surface-100 placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent;
+    @apply w-full bg-surface-800 border border-surface-600 px-3 py-2 text-sm text-surface-100 placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent;
   }
 
   .select {
@@ -82,7 +81,7 @@
   }
 
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center px-2 py-0.5 text-xs font-medium;
   }
 
   .badge-success {

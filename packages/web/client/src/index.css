@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-gaze-dot: rgba(239, 68, 68, 0.6);
+    --color-gaze-trail: rgba(239, 68, 68, 0.2);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 #0f172a;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 3px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-900 border border-surface-700 rounded-lg p-4;
+  }
+
+  .card-header {
+    @apply text-sm font-medium text-surface-400 uppercase tracking-wider mb-2;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-surface-900 disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent-600 text-white hover:bg-accent-700;
+  }
+
+  .btn-secondary {
+    @apply btn bg-surface-700 text-surface-200 hover:bg-surface-600;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+
+  .btn-ghost {
+    @apply btn text-surface-400 hover:text-surface-200 hover:bg-surface-800;
+  }
+
+  .input {
+    @apply w-full bg-surface-800 border border-surface-600 rounded-md px-3 py-2 text-sm text-surface-100 placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent;
+  }
+
+  .select {
+    @apply input appearance-none cursor-pointer;
+  }
+
+  .table-row {
+    @apply border-b border-surface-800 hover:bg-surface-800/50 transition-colors;
+  }
+
+  .tab {
+    @apply px-4 py-2 text-sm font-medium text-surface-400 border-b-2 border-transparent hover:text-surface-200 hover:border-surface-600 transition-colors;
+  }
+
+  .tab-active {
+    @apply tab text-accent-400 border-accent-500;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply badge bg-green-900/50 text-green-400;
+  }
+
+  .badge-warning {
+    @apply badge bg-yellow-900/50 text-yellow-400;
+  }
+
+  .badge-danger {
+    @apply badge bg-red-900/50 text-red-400;
+  }
+
+  .badge-info {
+    @apply badge bg-blue-900/50 text-blue-400;
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "gazekit",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source webcam-based eye tracking UX research tool",
+  "workspaces": [
+    "packages/shared",
+    "packages/extension",
+    "packages/web/client",
+    "packages/web/server"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w packages/web/server",
+    "dev:client": "npm run dev -w packages/web/client",
+    "dev:web": "npm run dev:server & npm run dev:client",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "eslint 'packages/*/src/**/*.{ts,tsx}'",
+    "test": "vitest run",
+    "clean": "rm -rf packages/*/dist packages/*/build node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "prettier": "^3.2.0",
+    "vitest": "^1.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

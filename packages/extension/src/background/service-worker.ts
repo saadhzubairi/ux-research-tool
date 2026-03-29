@@ -82,6 +82,21 @@ async function ensureOffscreenDocument(): Promise<void> {
     ],
     justification: 'WebSocket connection, webcam gaze tracking, and sandboxed WebGazer',
   })
+
+  // The offscreen module script loads asynchronously after createDocument
+  // resolves. Poll until its onMessage listener is registered.
+  for (let i = 0; i < 50; i++) {
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'ping' }) as
+        | { ready?: boolean }
+        | undefined
+      if (resp?.ready) return
+    } catch {
+      // Listener not registered yet — expected during module load
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  console.warn('[GazeKit SW] Offscreen document did not become ready within 5 s')
 }
 
 async function sendToOffscreen(

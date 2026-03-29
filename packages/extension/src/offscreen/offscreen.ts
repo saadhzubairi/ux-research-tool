@@ -401,6 +401,11 @@ chrome.runtime.onMessage.addListener(
     sendResponse: (response: unknown) => void,
   ): boolean | undefined => {
     switch (message.type) {
+      case 'ping': {
+        sendResponse({ ready: true })
+        return true
+      }
+
       case 'connect': {
         client.updatePort(message.port)
         client.connect()

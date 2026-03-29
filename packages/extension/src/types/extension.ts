@@ -87,6 +87,7 @@ export type ServiceWorkerToContentMessage =
 // ---------------------------------------------------------------------------
 
 export type ServiceWorkerToOffscreenMessage =
+  | { type: 'ping' }
   | { type: 'connect'; port: number }
   | { type: 'disconnect' }
   | { type: 'send'; message: ExtensionMessage }

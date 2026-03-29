@@ -54,7 +54,7 @@ export function useWebGazer(): UseWebGazerReturn {
       } else {
         addLog('Requesting camera...')
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' },
+          video: { width: 1280, height: 720, facingMode: 'user' },
         })
       }
       streamRef.current = stream

@@ -1,15 +1,17 @@
 export { WS_CONFIG } from './types/protocol'
 
-export const CALIBRATION_POINTS_9 = [
-  { x: 0.1, y: 0.1 }, { x: 0.5, y: 0.1 }, { x: 0.9, y: 0.1 },
-  { x: 0.1, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.9, y: 0.5 },
-  { x: 0.1, y: 0.9 }, { x: 0.5, y: 0.9 }, { x: 0.9, y: 0.9 },
-] as const
-
-export const CALIBRATION_POINTS_13 = [
-  ...CALIBRATION_POINTS_9,
-  { x: 0.3, y: 0.3 }, { x: 0.7, y: 0.3 },
-  { x: 0.3, y: 0.7 }, { x: 0.7, y: 0.7 },
+// Corners + diamond + center — 9 well-spaced points
+// Corners anchor the extremes, diamond fills the interior, center ties it together
+export const CALIBRATION_POINTS = [
+  // 4 corners
+  { x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 },
+  { x: 0.1, y: 0.9 }, { x: 0.9, y: 0.9 },
+  // 4 diamond points
+  { x: 0.5, y: 0.2 },
+  { x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 },
+  { x: 0.5, y: 0.8 },
+  // center
+  { x: 0.5, y: 0.5 },
 ] as const
 
 export const GAZE_CONFIDENCE_THRESHOLD = 0.4

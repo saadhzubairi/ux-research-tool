@@ -5,13 +5,13 @@
 // ---------------------------------------------------------------------------
 
 // Grid resolution divisor — density grid is 1/SCALE of viewport
-const SCALE = 4
-// Gaussian kernel radius in grid cells (~40px at SCALE=4 means ~10 cells)
-const KERNEL_RADIUS = 10
+const SCALE = 1
+// Gaussian kernel radius in grid cells (1:1 with viewport pixels at SCALE=1)
+const KERNEL_RADIUS = 25
 // Gaussian sigma in grid cells
-const KERNEL_SIGMA = 5
-// Render throttle — target ~10Hz
-const RENDER_INTERVAL_MS = 100
+const KERNEL_SIGMA = 10
+// Render throttle — target ~30Hz
+const RENDER_INTERVAL_MS = 33
 // Canvas opacity so the page remains readable
 const CANVAS_OPACITY = 0.45
 

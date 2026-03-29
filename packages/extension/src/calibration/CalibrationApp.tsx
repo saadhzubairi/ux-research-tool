@@ -51,7 +51,7 @@ export function CalibrationApp() {
     setStage('validation')
   }, [])
 
-  const handleRecordClick = useCallback(
+  const handleRecordSample = useCallback(
     (x: number, y: number) => {
       webgazer.recordScreenPosition(x, y)
     },
@@ -205,7 +205,7 @@ export function CalibrationApp() {
           />
         )}
         {stage === 'calibration' && (
-          <CalibrationStep onComplete={handleCalibrationComplete} onRecordClick={handleRecordClick} prediction={webgazer.prediction} />
+          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} prediction={webgazer.prediction} />
         )}
         {stage === 'validation' && (
           <ValidationStep

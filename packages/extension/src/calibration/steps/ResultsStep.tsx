@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import type { CalibrationResult } from '@gazekit/shared'
 import { QualityBadge } from '../components/QualityBadge'
 
@@ -13,9 +13,15 @@ export function ResultsStep({
   onRecalibrate,
   onStartTracking,
 }: ResultsStepProps) {
-  const handleStartTracking = useCallback(async () => {
+  const savedRef = useRef(false)
+
+  // Save calibration immediately when results are shown
+  useEffect(() => {
+    if (savedRef.current) return
+    savedRef.current = true
+
     const calibration: CalibrationResult = {
-      method: '9-point',
+      method: '9-point-dwell',
       avgErrorPx,
       precisionPx: avgErrorPx * 0.6,
       qualityScore: avgErrorPx < 80 ? 0.9 : avgErrorPx < 150 ? 0.7 : avgErrorPx < 200 ? 0.5 : 0.3,
@@ -25,15 +31,13 @@ export function ResultsStep({
       calibratedAt: new Date().toISOString(),
     }
 
-    await chrome.storage.local.set({ calibration })
+    chrome.storage.local.set({ calibration })
+    chrome.runtime.sendMessage({ type: 'calibration_complete', calibration })
+  }, [avgErrorPx])
 
-    chrome.runtime.sendMessage({
-      type: 'calibration_complete',
-      calibration,
-    })
-
+  const handleStartTracking = useCallback(() => {
     onStartTracking()
-  }, [avgErrorPx, onStartTracking])
+  }, [onStartTracking])
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-8 bg-gray-50">

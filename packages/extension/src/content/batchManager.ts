@@ -15,7 +15,7 @@ import { WS_CONFIG, GAZE_CONFIDENCE_THRESHOLD } from '@gazekit/shared'
 import { mapGazeToElement } from './domMapper'
 import { getDomVersion } from './domVersionTracker'
 
-const MAX_FAILED_BATCHES = 30 // ~30 seconds of data at 1-s intervals
+const MAX_FAILED_BATCHES = 120 // ~30 seconds of data at 250-ms intervals
 
 class BatchManager {
   private buffer: GazeEvent[] = []

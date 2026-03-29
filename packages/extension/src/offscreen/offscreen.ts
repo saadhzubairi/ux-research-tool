@@ -3,6 +3,64 @@ import type { ExtensionMessage, GazeSample, ServerMessage } from '@gazekit/share
 import type { ServiceWorkerToOffscreenMessage } from '../types/extension'
 
 // ---------------------------------------------------------------------------
+// One Euro Filter — adaptive low-pass filter for gaze smoothing
+// ---------------------------------------------------------------------------
+
+class LowPassFilter {
+  private s: number | null = null
+
+  filter(value: number, alpha: number): number {
+    if (this.s === null) {
+      this.s = value
+    } else {
+      this.s = alpha * value + (1 - alpha) * this.s
+    }
+    return this.s
+  }
+
+  get last(): number | null {
+    return this.s
+  }
+}
+
+class OneEuroFilter {
+  private freq: number
+  private minCutoff: number
+  private beta: number
+  private dCutoff: number
+  private xFilt = new LowPassFilter()
+  private dxFilt = new LowPassFilter()
+  private lastTime: number | null = null
+
+  constructor(freq: number, minCutoff: number, beta: number, dCutoff: number) {
+    this.freq = freq
+    this.minCutoff = minCutoff
+    this.beta = beta
+    this.dCutoff = dCutoff
+  }
+
+  private alpha(cutoff: number): number {
+    const te = 1.0 / this.freq
+    const tau = 1.0 / (2 * Math.PI * cutoff)
+    return 1.0 / (1.0 + tau / te)
+  }
+
+  filter(value: number, timestamp: number): number {
+    if (this.lastTime !== null) {
+      const dt = (timestamp - this.lastTime) / 1000
+      if (dt > 0) this.freq = 1.0 / dt
+    }
+    this.lastTime = timestamp
+
+    const prev = this.xFilt.last
+    const dValue = prev !== null ? (value - prev) * this.freq : 0
+    const edValue = this.dxFilt.filter(dValue, this.alpha(this.dCutoff))
+    const cutoff = this.minCutoff + this.beta * Math.abs(edValue)
+    return this.xFilt.filter(value, this.alpha(cutoff))
+  }
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket client for offscreen document
 // ---------------------------------------------------------------------------
 
@@ -174,6 +232,14 @@ let gazeFlushCount = 0
 let nullPredictionCount = 0
 let totalPredictionCount = 0
 
+// One Euro Filter instances for smoothing gaze predictions
+const gazeFilterX = new OneEuroFilter(60, 1.5, 0.007, 1.0)
+const gazeFilterY = new OneEuroFilter(60, 1.5, 0.007, 1.0)
+
+// Outlier rejection — track last accepted position
+let lastAcceptedX: number | null = null
+let lastAcceptedY: number | null = null
+
 async function loadAndImportModel(): Promise<void> {
   try {
     // Offscreen documents don't have chrome.storage access — ask the service worker
@@ -242,7 +308,22 @@ function handleSandboxMessage(event: MessageEvent): void {
       totalPredictionCount++
       const pred = msg.data?.prediction
       if (pred) {
-        gazeBuffer.push({ x: pred.x, y: pred.y, ts: Date.now(), conf: null })
+        // Outlier rejection: skip if >400px jump from last accepted position
+        if (lastAcceptedX !== null && lastAcceptedY !== null) {
+          const dx = pred.x - lastAcceptedX
+          const dy = pred.y - lastAcceptedY
+          if (Math.sqrt(dx * dx + dy * dy) > 400) {
+            nullPredictionCount++
+            break
+          }
+        }
+        // Apply One Euro Filter for smoothing
+        const now = Date.now()
+        const filteredX = gazeFilterX.filter(pred.x, now)
+        const filteredY = gazeFilterY.filter(pred.y, now)
+        lastAcceptedX = filteredX
+        lastAcceptedY = filteredY
+        gazeBuffer.push({ x: filteredX, y: filteredY, ts: now, conf: null })
         nullPredictionCount = 0 // reset
       } else {
         nullPredictionCount++
@@ -275,7 +356,7 @@ function handleSandboxMessage(event: MessageEvent): void {
 function startFrameLoop(): void {
   const sendFrame = () => {
     if (!gazeVideo || !gazeCtx || !gazeCanvas || !gazeIframe?.contentWindow) {
-      gazeFrameLoop = setTimeout(sendFrame, 32)
+      gazeFrameLoop = setTimeout(sendFrame, 16)
       return
     }
     gazeCtx.drawImage(gazeVideo, 0, 0)
@@ -286,9 +367,9 @@ function startFrameLoop(): void {
         [bitmap],
       )
     }).catch(() => { /* non-fatal */ })
-    gazeFrameLoop = setTimeout(sendFrame, 32) // ~30fps
+    gazeFrameLoop = setTimeout(sendFrame, 16) // ~30fps
   }
-  gazeFrameLoop = setTimeout(sendFrame, 32)
+  gazeFrameLoop = setTimeout(sendFrame, 16)
 }
 
 function startGazeFlush(): void {
@@ -312,10 +393,12 @@ function startGazeFlush(): void {
 async function startGazeEngine(): Promise<void> {
   console.log('[GazeKit Offscreen] Starting gaze engine...')
 
-  // Reset counters
+  // Reset counters and filter state
   gazeFlushCount = 0
   nullPredictionCount = 0
   totalPredictionCount = 0
+  lastAcceptedX = null
+  lastAcceptedY = null
 
   // 1. Get camera
   gazeStream = await navigator.mediaDevices.getUserMedia({

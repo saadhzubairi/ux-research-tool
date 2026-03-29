@@ -8,7 +8,7 @@ import type { GazeElement, GazeSample } from '@gazekit/shared'
 import { MAX_SELECTOR_DEPTH } from '@gazekit/shared'
 
 let lastCallTs = 0
-const THROTTLE_MS = 50 // 20 Hz max
+const THROTTLE_MS = 25 // 40 Hz max
 
 const INTERACTIVE_TAGS = new Set([
   'button', 'a', 'input', 'select', 'textarea', 'label',

@@ -39,7 +39,7 @@ export interface GazeBatch {
 }
 
 export interface CalibrationResult {
-  method: '9-point' | '13-point'
+  method: '9-point' | '13-point' | '21-point' | '9-point-dwell'
   avgErrorPx: number
   precisionPx: number
   qualityScore: number

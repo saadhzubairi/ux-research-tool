@@ -1,17 +1,17 @@
 import React, { useState, useCallback } from 'react'
-import { CALIBRATION_POINTS_13 } from '@gazekit/shared'
+import { CALIBRATION_POINTS } from '@gazekit/shared'
 import { CalibrationDot } from '../components/CalibrationDot'
 import { ProgressBar } from '../components/ProgressBar'
 
 interface CalibrationStepProps {
   onComplete: () => void
-  onRecordClick: (x: number, y: number) => void
+  onRecordSample: (x: number, y: number) => void
   prediction: { x: number; y: number } | null
 }
 
-export function CalibrationStep({ onComplete, onRecordClick, prediction }: CalibrationStepProps) {
+export function CalibrationStep({ onComplete, onRecordSample, prediction }: CalibrationStepProps) {
   const [currentPointIndex, setCurrentPointIndex] = useState(0)
-  const totalPoints = CALIBRATION_POINTS_13.length
+  const totalPoints = CALIBRATION_POINTS.length
 
   const handlePointComplete = useCallback(() => {
     const nextIndex = currentPointIndex + 1
@@ -40,17 +40,16 @@ export function CalibrationStep({ onComplete, onRecordClick, prediction }: Calib
 
       <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center px-4 pt-4">
         <p className="rounded-lg bg-gray-100/90 px-5 py-2.5 text-sm text-gray-700 shadow-sm backdrop-blur">
-          <span className="font-semibold">Stare at the dot</span>, then click it slowly 8 times. Keep your eyes on the dot, not your cursor.
+          <span className="font-semibold">Stare at each dot</span> as it appears and shrinks. No clicking needed — just keep your eyes on it.
         </p>
       </div>
 
-      {CALIBRATION_POINTS_13.map((point, index) => (
+      {CALIBRATION_POINTS.map((point, index) => (
         <CalibrationDot
           key={`${point.x}-${point.y}`}
           position={point}
-          clicksRequired={8}
           onComplete={handlePointComplete}
-          onRecordClick={onRecordClick}
+          onRecordSample={onRecordSample}
           active={index === currentPointIndex}
         />
       ))}

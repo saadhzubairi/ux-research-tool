@@ -54,7 +54,7 @@ function setupFrameReceiver(width: number, height: number) {
   feedCtx.fillStyle = '#111'
   feedCtx.fillRect(0, 0, width, height)
 
-  fakeStream = feedCanvas.captureStream(30) // capture at 30fps from canvas updates
+  fakeStream = feedCanvas.captureStream(60) // capture at 60fps from canvas updates
   post('log', `Frame receiver: ${width}x${height}, tracks=${fakeStream.getTracks().length}`)
 }
 
@@ -125,9 +125,10 @@ async function init(videoWidth: number, videoHeight: number) {
     webgazer = wg.default || wg
     post('log', 'WebGazer imported ✓')
 
-    webgazer.setRegression('ridge')
+    webgazer.setRegression('weightedRidge')
+    webgazer.applyKalmanFilter(true)
     webgazer.params.saveDataAcrossSessions = false // opaque origin has no storage
-    post('log', 'Ridge regression set')
+    post('log', 'Weighted ridge regression + Kalman filter set')
 
     webgazer.setGazeListener((data: { x: number; y: number } | null) => {
       listenerCount++

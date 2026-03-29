@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import type { ApiResponse, SessionsQuery, ReplayData, ElementAttention } from '@gazekit/shared'
+import type { ApiResponse, SessionsQuery, ReplayData, ElementAttention, CalibrationResult } from '@gazekit/shared'
 import { Session } from '../models/Session'
 import { GazeEvent } from '../models/GazeEvent'
 import { RrwebEvent } from '../models/RrwebEvent'
@@ -218,7 +218,7 @@ sessionsRouter.get('/:id/replay', async (req, res, next) => {
           },
         },
         calibration: {
-          method: (session.calibration?.method as '9-point' | '13-point') ?? '9-point',
+          method: (session.calibration?.method as CalibrationResult['method']) ?? '9-point',
           avgErrorPx: session.calibration?.avgErrorPx ?? 0,
           precisionPx: session.calibration?.precisionPx ?? 0,
           qualityScore: session.calibration?.qualityScore ?? 0,

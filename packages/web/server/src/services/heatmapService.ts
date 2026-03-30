@@ -5,11 +5,31 @@ import { Screenshot } from '../models/Screenshot'
 import { Session } from '../models/Session'
 import { getFixations } from './fixationService'
 
+function buildScreenshotUrl(screenshot: Record<string, unknown> | null): string | null {
+  if (!screenshot) return null
+  const filename = screenshot.filename as string | undefined
+  const sessionId = screenshot.sessionId as string | undefined
+  const visitFolder = screenshot.visitFolder as string | undefined
+  const filePath = screenshot.filePath as string | undefined
+  if (filename && sessionId && visitFolder) {
+    return `/api/screenshots/${sessionId}/${visitFolder}/${filename}`
+  }
+  if (filename && sessionId) {
+    return `/api/screenshots/${sessionId}/${filename}`
+  }
+  if (filePath) {
+    return `/api/screenshots/${filePath.split('/').pop()}`
+  }
+  return null
+}
+
 export async function getSessionHeatmap(
   sessionId: string,
-  url: string
+  url: string,
+  fromTs?: number,
+  toTs?: number,
 ): Promise<HeatmapData> {
-  const fixations = await getFixations(sessionId, url)
+  const fixations = await getFixations(sessionId, url, fromTs, toTs)
 
   const firstEvent = await GazeEvent.findOne({
     'meta.sid': sessionId,
@@ -28,14 +48,33 @@ export async function getSessionHeatmap(
     }
   })
 
-  const screenshot = await Screenshot.findOne({
-    sessionId,
-    url,
-  }).sort({ capturedAt: -1 }).lean()
+  let screenshotDoc: Record<string, unknown> | null = null
+  if (toTs !== undefined) {
+    // In timeline mode, pick screenshot closest to the time bound
+    const toDate = new Date(toTs)
+    const before = await Screenshot.findOne({
+      sessionId, url, capturedAt: { $lte: toDate },
+    }).sort({ capturedAt: -1 }).lean()
+    const after = await Screenshot.findOne({
+      sessionId, url, capturedAt: { $gt: toDate },
+    }).sort({ capturedAt: 1 }).lean()
 
-  const screenshotUrl = screenshot?.filePath
-    ? `/api/screenshots/${screenshot.filePath.split('/').pop()}`
-    : null
+    if (before && after) {
+      const diffBefore = toDate.getTime() - new Date(before.capturedAt).getTime()
+      const diffAfter = new Date(after.capturedAt).getTime() - toDate.getTime()
+      const pick = diffBefore <= diffAfter ? before : after
+      screenshotDoc = { filePath: pick.filePath, filename: pick.filename, visitFolder: pick.visitFolder, sessionId }
+    } else {
+      const pick = before ?? after
+      screenshotDoc = pick ? { filePath: pick.filePath, filename: pick.filename, visitFolder: pick.visitFolder, sessionId } : null
+    }
+  } else {
+    const latest = await Screenshot.findOne({ sessionId, url })
+      .sort({ capturedAt: -1 }).lean()
+    screenshotDoc = latest ? { filePath: latest.filePath, filename: latest.filename, visitFolder: latest.visitFolder, sessionId } : null
+  }
+
+  const screenshotUrl = buildScreenshotUrl(screenshotDoc)
 
   return {
     sessionId,
@@ -108,12 +147,14 @@ export async function getAggregateHeatmap(
     }
   }
 
-  const screenshot = await Screenshot.findOne({ url })
+  const aggScreenshot = await Screenshot.findOne({ url })
     .sort({ capturedAt: -1 }).lean()
 
-  const screenshotUrl = screenshot?.filePath
-    ? `/api/screenshots/${screenshot.filePath.split('/').pop()}`
-    : null
+  const screenshotUrl = buildScreenshotUrl(
+    aggScreenshot
+      ? { filePath: aggScreenshot.filePath, filename: aggScreenshot.filename, visitFolder: aggScreenshot.visitFolder, sessionId: aggScreenshot.sessionId }
+      : null
+  )
 
   return {
     sessionId: null,

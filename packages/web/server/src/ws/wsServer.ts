@@ -180,14 +180,50 @@ async function handleRrwebEvents(
   })
 }
 
+function sanitizeUrlForFilename(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const raw = parsed.hostname + parsed.pathname
+    return raw.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80)
+  } catch {
+    return url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80)
+  }
+}
+
 async function handlePageScreenshot(
   payload: Extract<ExtensionMessage, { type: 'page_screenshot' }>['payload']
 ): Promise<void> {
-  const screenshotDir = path.join(config.dataDir, 'screenshots', payload.sessionId)
+  const { sessionId, url } = payload
+
+  // Visit detection: find the most recent screenshot for this session (any URL)
+  const mostRecent = await Screenshot.findOne({ sessionId })
+    .sort({ capturedAt: -1 })
+    .lean()
+
+  let visitIndex: number
+  let index: number
+
+  if (!mostRecent) {
+    // First screenshot in this session
+    visitIndex = 1
+    index = 0
+  } else if (mostRecent.url === url) {
+    // Same URL as last screenshot — continue the current visit
+    visitIndex = mostRecent.visitIndex ?? 1
+    index = (mostRecent.index ?? 0) + 1
+  } else {
+    // Different URL — new visit for this URL
+    const existingVisitCount = await Screenshot.distinct('visitIndex', { sessionId, url })
+    visitIndex = existingVisitCount.length + 1
+    index = 0
+  }
+
+  const sanitizedUrl = sanitizeUrlForFilename(url)
+  const visitFolder = `${sanitizedUrl}-visit-${visitIndex}`
+  const screenshotDir = path.join(config.dataDir, 'screenshots', sessionId, visitFolder)
   await fs.mkdir(screenshotDir, { recursive: true })
 
-  const timestamp = Date.now()
-  const filename = `${timestamp}.png`
+  const filename = `${index}.png`
   const filePath = path.join(screenshotDir, filename)
 
   const base64Match = payload.dataUrl.match(/^data:image\/\w+;base64,(.+)$/)
@@ -198,14 +234,33 @@ async function handlePageScreenshot(
   const buffer = Buffer.from(base64Match[1], 'base64')
   await fs.writeFile(filePath, buffer)
 
+  const timestamp = Date.now()
+
   await Screenshot.create({
-    sessionId: payload.sessionId,
-    url: payload.url,
+    sessionId,
+    url,
     scrollY: payload.scrollY,
     viewportHeight: payload.viewportHeight,
     filePath,
+    filename,
+    visitIndex,
+    visitFolder,
+    index,
     capturedAt: new Date(timestamp),
   })
+
+  // When this is the first screenshot of a new visit (index === 0),
+  // push the URL into session.pages so URL tabs appear in the client
+  if (index === 0) {
+    await Session.updateOne(
+      { sessionId },
+      {
+        $push: {
+          pages: { url, enteredAt: new Date(timestamp) },
+        },
+      }
+    )
+  }
 }
 
 async function handleCalibrationUpdate(

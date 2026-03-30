@@ -16,6 +16,7 @@ export type {
   HeatmapData,
   ReplayData,
   ElementAttention,
+  ScreenshotInfo,
 } from './types'
 
 export { WS_CONFIG } from './types'

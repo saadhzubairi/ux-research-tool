@@ -5,7 +5,54 @@ import { config } from '../config/env'
 
 export const screenshotsRouter = Router()
 
-// GET /api/screenshots/:filename — serve screenshot files
+// GET /api/screenshots/:sessionId/:visitFolder/:filename — visit-folder path resolution
+screenshotsRouter.get('/:sessionId/:visitFolder/:filename', async (req, res, next) => {
+  try {
+    const { sessionId, visitFolder, filename } = req.params
+
+    if (!sessionId || !visitFolder || !filename
+      || [sessionId, visitFolder, filename].some(p => p.includes('..') || p.includes('/') || p.includes('\\'))) {
+      res.status(400).json({ success: false, error: 'Invalid parameters' })
+      return
+    }
+
+    const filePath = path.join(config.dataDir, 'screenshots', sessionId, visitFolder, filename)
+
+    try {
+      await fs.access(filePath)
+      res.sendFile(path.resolve(filePath))
+    } catch {
+      res.status(404).json({ success: false, error: 'Screenshot not found' })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/screenshots/:sessionId/:filename — direct path resolution (legacy)
+screenshotsRouter.get('/:sessionId/:filename', async (req, res, next) => {
+  try {
+    const { sessionId, filename } = req.params
+
+    if (!sessionId || !filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      res.status(400).json({ success: false, error: 'Invalid parameters' })
+      return
+    }
+
+    const filePath = path.join(config.dataDir, 'screenshots', sessionId, filename)
+
+    try {
+      await fs.access(filePath)
+      res.sendFile(path.resolve(filePath))
+    } catch {
+      res.status(404).json({ success: false, error: 'Screenshot not found' })
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/screenshots/:filename — serve screenshot files (legacy)
 screenshotsRouter.get('/:filename', async (req, res, next) => {
   try {
     const filename = req.params.filename

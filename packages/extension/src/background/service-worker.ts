@@ -30,6 +30,8 @@ let state: ExtensionState = {
 let settings: ExtensionSettings = { ...DEFAULT_SETTINGS }
 
 let screenshotTimer: ReturnType<typeof setInterval> | null = null
+let screenshotIndex = 0
+let initialSetupInProgress = false
 
 // ---------------------------------------------------------------------------
 // Persistence helpers
@@ -142,6 +144,8 @@ async function captureScreenshot(): Promise<void> {
       ? await chrome.tabs.get(state.activeTabId)
       : null
 
+    const currentIndex = screenshotIndex++
+
     const message: ExtensionMessage = {
       type: 'page_screenshot',
       payload: {
@@ -150,6 +154,7 @@ async function captureScreenshot(): Promise<void> {
         dataUrl,
         scrollY: 0,
         viewportHeight: 0,
+        index: currentIndex,
       },
     }
 
@@ -195,6 +200,7 @@ async function startSession(targetTabId?: number): Promise<string> {
 
   // 2. Get tab info and update state immediately so popup sees isTracking: true
   const tab = await chrome.tabs.get(tabId)
+  screenshotIndex = 0
   state.currentSessionId = sessionId
   state.isTracking = true
   state.isPaused = false
@@ -209,6 +215,7 @@ async function startSession(targetTabId?: number): Promise<string> {
 }
 
 async function startSessionBackground(sessionId: string, tabId: number): Promise<void> {
+  initialSetupInProgress = true
   try {
     // Focus the target tab
     await chrome.tabs.update(tabId, { active: true })
@@ -335,7 +342,9 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
     }
 
     await sendToOffscreen({ type: 'send', message: sessionStartMessage })
+    initialSetupInProgress = false
   } catch (err) {
+    initialSetupInProgress = false
     console.error('[GazeKit] Background session start failed:', err)
     // Revert state on failure
     state.currentSessionId = null
@@ -619,6 +628,77 @@ async function handleServerCommand(
       return { error: 'Unknown server command' }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tab navigation listener — re-attach tracking on full-page navigation
+// ---------------------------------------------------------------------------
+
+chrome.tabs.onUpdated.addListener(
+  (tabId, changeInfo, tab) => {
+    // Only care about the tracked tab completing a navigation
+    if (
+      !state.isTracking ||
+      !state.currentSessionId ||
+      tabId !== state.activeTabId ||
+      changeInfo.status !== 'complete' ||
+      initialSetupInProgress
+    ) {
+      return
+    }
+
+    const newUrl = tab.url ?? ''
+
+    // Skip restricted URLs where content scripts can't run
+    if (
+      newUrl.startsWith('chrome://') ||
+      newUrl.startsWith('chrome-extension://') ||
+      newUrl.startsWith('about:') ||
+      newUrl.startsWith('devtools://')
+    ) {
+      return
+    }
+
+    // Re-send start_tracking to the fresh content script.
+    // This fires on both navigation to a new URL and page refresh (same URL).
+    console.log(`[GazeKit SW] Tab loaded: ${state.activeTabUrl} → ${newUrl}`)
+    state.activeTabUrl = newUrl
+    void saveState()
+    void reattachTracking(tabId)
+  },
+)
+
+async function reattachTracking(tabId: number): Promise<void> {
+  if (!state.currentSessionId) return
+
+  const trackingMsg: ServiceWorkerToContentMessage = {
+    type: 'start_tracking',
+    sessionId: state.currentSessionId,
+    settings,
+    heatmapEnabled: true,
+  }
+
+  // The manifest-declared content script auto-injects at document_idle,
+  // but it may not be ready yet. Retry a few times.
+  for (let attempt = 0; attempt < 15; attempt++) {
+    try {
+      const response = await sendToContentScript(tabId, trackingMsg) as
+        | Record<string, unknown>
+        | undefined
+      if (response?.success) {
+        console.log('[GazeKit SW] ✓ Tracking re-attached on new page')
+
+        // Take an initial screenshot of the new page
+        void captureScreenshot()
+        return
+      }
+    } catch {
+      // Content script not ready yet — expected during page load
+    }
+    await new Promise((r) => setTimeout(r, 300))
+  }
+
+  console.warn('[GazeKit SW] ⚠ Failed to re-attach tracking after navigation')
 }
 
 // ---------------------------------------------------------------------------

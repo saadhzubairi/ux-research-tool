@@ -1,8 +1,10 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   useSessionQuery,
   useHeatmapQuery,
+  useTimelineHeatmapQuery,
+  useSessionScreenshots,
   useReplayQuery,
   useElementsQuery,
   useDeleteSession,
@@ -10,6 +12,10 @@ import {
 import { formatDuration, formatDate, formatNumber } from '../utils/formatters'
 import HeatmapCanvas from '../components/heatmap/HeatmapCanvas'
 import HeatmapControls from '../components/heatmap/HeatmapControls'
+import HeatmapUrlTabs from '../components/heatmap/HeatmapUrlTabs'
+import HeatmapModeToggle from '../components/heatmap/HeatmapModeToggle'
+import type { HeatmapMode } from '../components/heatmap/HeatmapModeToggle'
+import TimelineSlider from '../components/heatmap/TimelineSlider'
 import ReplayPlayer from '../components/replay/ReplayPlayer'
 import ElementTable from '../components/elements/ElementTable'
 import AttentionChart from '../components/elements/AttentionChart'
@@ -29,26 +35,80 @@ export default function SessionDetailPage() {
   const [heatmapOpacity, setHeatmapOpacity] = useState(70)
   const [heatmapBlur, setHeatmapBlur] = useState(50)
   const [showFixations, setShowFixations] = useState(false)
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>('final')
+  const [timelineIndex, setTimelineIndex] = useState(0)
 
   const { data: sessionResponse, isLoading: sessionLoading } = useSessionQuery(sessionId)
-  const { data: heatmapResponse } = useHeatmapQuery(sessionId, heatmapUrl || undefined)
   const { data: replayResponse, isLoading: replayLoading } = useReplayQuery(sessionId)
   const { data: elementsResponse, isLoading: elementsLoading } = useElementsQuery(sessionId)
   const deleteSession = useDeleteSession()
 
   const session = sessionResponse?.data
-  const heatmapData = heatmapResponse?.data ?? null
   const replayData = replayResponse?.data ?? null
   const elements = elementsResponse?.data ?? []
 
   const pageUrls = session?.pages.map((p) => p.url) ?? []
-  const uniqueUrls = [...new Set(pageUrls)]
+  const uniqueUrls = useMemo(() => [...new Set(pageUrls)], [pageUrls.join(',')])
 
+  // Set initial URL
   useEffect(() => {
     if (!heatmapUrl && uniqueUrls.length > 0) {
       setHeatmapUrl(uniqueUrls[0]!)
     }
   }, [uniqueUrls.length])
+
+  // Reset timeline index on URL change
+  const handleUrlChange = useCallback((url: string) => {
+    setHeatmapUrl(url)
+    setTimelineIndex(0)
+  }, [])
+
+  // Screenshots for timeline mode
+  const { data: screenshotsResponse } = useSessionScreenshots(
+    sessionId,
+    heatmapUrl || undefined,
+  )
+  const screenshots = screenshotsResponse?.data ?? []
+
+  // Compute toTs from current timeline screenshot
+  const timelineToTs = useMemo(() => {
+    if (heatmapMode !== 'timeline' || screenshots.length === 0) return undefined
+    const screenshot = screenshots[timelineIndex]
+    return screenshot ? new Date(screenshot.capturedAt).getTime() : undefined
+  }, [heatmapMode, screenshots, timelineIndex])
+
+  // Final mode query
+  const { data: finalHeatmapResponse } = useHeatmapQuery(
+    sessionId,
+    heatmapMode === 'final' ? (heatmapUrl || undefined) : undefined,
+  )
+
+  // Timeline mode query
+  const { data: timelineHeatmapResponse } = useTimelineHeatmapQuery(
+    sessionId,
+    heatmapMode === 'timeline' ? (heatmapUrl || undefined) : undefined,
+    timelineToTs,
+  )
+
+  const heatmapData = heatmapMode === 'final'
+    ? (finalHeatmapResponse?.data ?? null)
+    : (timelineHeatmapResponse?.data ?? null)
+
+  // Screenshot URL override for HeatmapCanvas:
+  // - Timeline mode: use the screenshot at the current slider position
+  // - Final mode: use the latest screenshot from the list as fallback
+  //   (the heatmap API might return null if screenshot URL can't resolve)
+  const screenshotOverride = useMemo(() => {
+    if (screenshots.length === 0) return undefined
+
+    if (heatmapMode === 'timeline') {
+      return screenshots[timelineIndex]?.screenshotUrl ?? undefined
+    }
+
+    // Final mode: use latest screenshot as fallback if heatmap API doesn't have one
+    if (heatmapData?.screenshotUrl) return undefined // let HeatmapCanvas use data.screenshotUrl
+    return screenshots[screenshots.length - 1]?.screenshotUrl ?? undefined
+  }, [heatmapMode, screenshots, timelineIndex, heatmapData?.screenshotUrl])
 
   const handleDelete = useCallback(() => {
     deleteSession.mutate(sessionId, {
@@ -127,27 +187,41 @@ export default function SessionDetailPage() {
       )}
 
       {activeTab === 'heatmap' && (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-3">
-            <HeatmapCanvas
-              data={heatmapData}
-              opacity={heatmapOpacity}
-              blurRadius={heatmapBlur}
-              showFixations={showFixations}
-            />
-          </div>
-          <div>
-            <HeatmapControls
-              urls={uniqueUrls}
-              selectedUrl={heatmapUrl || uniqueUrls[0] || ''}
-              onUrlChange={setHeatmapUrl}
-              opacity={heatmapOpacity}
-              onOpacityChange={setHeatmapOpacity}
-              blurRadius={heatmapBlur}
-              onBlurRadiusChange={setHeatmapBlur}
-              showFixations={showFixations}
-              onToggleFixations={() => setShowFixations((v) => !v)}
-            />
+        <div>
+          <HeatmapUrlTabs
+            urls={uniqueUrls}
+            selectedUrl={heatmapUrl || uniqueUrls[0] || ''}
+            onUrlChange={handleUrlChange}
+          />
+          <HeatmapModeToggle mode={heatmapMode} onModeChange={setHeatmapMode} />
+
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-3">
+              <HeatmapCanvas
+                data={heatmapData}
+                opacity={heatmapOpacity}
+                blurRadius={heatmapBlur}
+                showFixations={showFixations}
+                screenshotUrlOverride={screenshotOverride}
+              />
+              {heatmapMode === 'timeline' && (
+                <TimelineSlider
+                  screenshots={screenshots}
+                  currentIndex={timelineIndex}
+                  onIndexChange={setTimelineIndex}
+                />
+              )}
+            </div>
+            <div>
+              <HeatmapControls
+                opacity={heatmapOpacity}
+                onOpacityChange={setHeatmapOpacity}
+                blurRadius={heatmapBlur}
+                onBlurRadiusChange={setHeatmapBlur}
+                showFixations={showFixations}
+                onToggleFixations={() => setShowFixations((v) => !v)}
+              />
+            </div>
           </div>
         </div>
       )}

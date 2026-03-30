@@ -23,4 +23,5 @@ export type {
   HeatmapData,
   ReplayData,
   ElementAttention,
+  ScreenshotInfo,
 } from './api'

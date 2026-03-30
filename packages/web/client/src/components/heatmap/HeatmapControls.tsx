@@ -1,7 +1,7 @@
 interface HeatmapControlsProps {
-  urls: string[]
-  selectedUrl: string
-  onUrlChange: (url: string) => void
+  urls?: string[]
+  selectedUrl?: string
+  onUrlChange?: (url: string) => void
   opacity: number
   onOpacityChange: (value: number) => void
   blurRadius: number
@@ -25,7 +25,7 @@ export default function HeatmapControls({
     <div className="card space-y-4">
       <h3 className="card-header">Heatmap Controls</h3>
 
-      {urls.length > 1 && (
+      {urls && urls.length > 1 && selectedUrl && onUrlChange && (
         <div>
           <label className="block text-xs text-surface-400 mb-1">Page URL</label>
           <select

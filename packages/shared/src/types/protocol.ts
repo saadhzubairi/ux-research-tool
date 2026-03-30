@@ -4,7 +4,7 @@ export type ExtensionMessage =
   | { type: 'session_start'; payload: SessionMeta }
   | { type: 'gaze_batch'; payload: GazeBatch }
   | { type: 'rrweb_events'; payload: { sessionId: string; events: any[] } }
-  | { type: 'page_screenshot'; payload: { sessionId: string; url: string; dataUrl: string; scrollY: number; viewportHeight: number } }
+  | { type: 'page_screenshot'; payload: { sessionId: string; url: string; dataUrl: string; scrollY: number; viewportHeight: number; index?: number } }
   | { type: 'calibration_update'; payload: { sessionId: string; calibration: CalibrationResult } }
   | { type: 'session_end'; payload: { sessionId: string; endedAt: string; stats: SessionMeta['stats'] } }
   | { type: 'heartbeat'; payload: { sessionId: string; ts: number } }

@@ -9,6 +9,8 @@ export const heatmapRouter = Router()
 
 const sessionHeatmapQuerySchema = z.object({
   url: z.string().min(1, 'url is required'),
+  from: z.coerce.number().optional(),
+  to: z.coerce.number().optional(),
 })
 
 const aggregateHeatmapQuerySchema = z.object({
@@ -63,7 +65,12 @@ heatmapRouter.get(
         return
       }
 
-      const heatmapData = await getSessionHeatmap(sessionId, query.url)
+      const heatmapData = await getSessionHeatmap(
+        sessionId,
+        query.url,
+        query.from,
+        query.to,
+      )
 
       const response: ApiResponse<HeatmapData> = {
         success: true,

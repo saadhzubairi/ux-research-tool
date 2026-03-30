@@ -32,6 +32,14 @@ export interface ReplayData {
   gazeTimeline: Array<{ ts: number; x: number; y: number; conf: number | null }>
 }
 
+export interface ScreenshotInfo {
+  index: number
+  visitIndex: number
+  url: string
+  capturedAt: string
+  screenshotUrl: string
+}
+
 export interface ElementAttention {
   selector: string
   tag: string

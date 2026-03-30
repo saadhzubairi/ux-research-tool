@@ -10,8 +10,8 @@ interface CacheEntry {
 const LRU_MAX = 50
 const cache = new Map<string, CacheEntry>()
 
-function cacheKey(sessionId: string, url: string): string {
-  return `${sessionId}::${url}`
+function cacheKey(sessionId: string, url: string, fromTs?: number, toTs?: number): string {
+  return `${sessionId}::${url}::${fromTs ?? ''}::${toTs ?? ''}`
 }
 
 function evictIfNeeded(): void {
@@ -23,8 +23,13 @@ function evictIfNeeded(): void {
   }
 }
 
-export async function getFixations(sessionId: string, url: string): Promise<Fixation[]> {
-  const key = cacheKey(sessionId, url)
+export async function getFixations(
+  sessionId: string,
+  url: string,
+  fromTs?: number,
+  toTs?: number,
+): Promise<Fixation[]> {
+  const key = cacheKey(sessionId, url, fromTs, toTs)
 
   const cached = cache.get(key)
   if (cached) {
@@ -33,10 +38,19 @@ export async function getFixations(sessionId: string, url: string): Promise<Fixa
     return cached.fixations
   }
 
-  const gazeEvents = await GazeEvent.find({
+  const query: Record<string, unknown> = {
     'meta.sid': sessionId,
     'ctx.url': url,
-  }).sort({ ts: 1 }).lean()
+  }
+
+  if (fromTs !== undefined || toTs !== undefined) {
+    const tsFilter: Record<string, Date> = {}
+    if (fromTs !== undefined) tsFilter.$gte = new Date(fromTs)
+    if (toTs !== undefined) tsFilter.$lte = new Date(toTs)
+    query.ts = tsFilter
+  }
+
+  const gazeEvents = await GazeEvent.find(query).sort({ ts: 1 }).lean()
 
   const samples: GazeSample[] = gazeEvents.map(e => ({
     x: e.x ?? 0,

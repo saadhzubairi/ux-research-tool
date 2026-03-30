@@ -6,6 +6,7 @@ import type {
   ElementAttention,
   ApiResponse,
   SessionsQuery,
+  ScreenshotInfo,
 } from '@gazekit/shared'
 import api from './client'
 
@@ -65,6 +66,37 @@ export function useAggregateHeatmapQuery(
         })
         .then((r) => r.data),
     enabled: !!url,
+  })
+}
+
+export function useTimelineHeatmapQuery(
+  sessionId: string,
+  url?: string,
+  toTs?: number,
+) {
+  return useQuery({
+    queryKey: ['heatmap', sessionId, url, 'timeline', toTs],
+    queryFn: () =>
+      api
+        .get<ApiResponse<HeatmapData>>(`/api/heatmap/${sessionId}`, {
+          params: { url, to: toTs },
+        })
+        .then((r) => r.data),
+    enabled: !!sessionId && !!url && toTs !== undefined,
+  })
+}
+
+export function useSessionScreenshots(sessionId: string, url?: string) {
+  return useQuery({
+    queryKey: ['screenshots', sessionId, url],
+    queryFn: () =>
+      api
+        .get<ApiResponse<ScreenshotInfo[]>>(
+          `/api/sessions/${sessionId}/screenshots`,
+          { params: url ? { url } : undefined },
+        )
+        .then((r) => r.data),
+    enabled: !!sessionId,
   })
 }
 

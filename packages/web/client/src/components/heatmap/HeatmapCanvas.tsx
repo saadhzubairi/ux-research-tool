@@ -6,6 +6,7 @@ interface HeatmapCanvasProps {
   opacity: number
   blurRadius: number
   showFixations: boolean
+  screenshotUrlOverride?: string | null
 }
 
 function buildPalette(): Uint8Array {
@@ -84,6 +85,7 @@ export default function HeatmapCanvas({
   opacity,
   blurRadius,
   showFixations,
+  screenshotUrlOverride,
 }: HeatmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -126,7 +128,9 @@ export default function HeatmapCanvas({
     return () => observer.disconnect()
   }, [paint])
 
-  const screenshotUrl = data?.screenshotUrl
+  const screenshotUrl = screenshotUrlOverride !== undefined
+    ? screenshotUrlOverride
+    : data?.screenshotUrl ?? null
 
   return (
     <div className="card p-0 overflow-hidden">
@@ -147,8 +151,16 @@ export default function HeatmapCanvas({
           className="absolute inset-0 w-full h-full"
         />
         {!data && (
-          <div className="absolute inset-0 flex items-center justify-center text-surface-500 text-sm">
-            No heatmap data available
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-surface-500">
+            <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
+            </svg>
+            <span className="text-sm">No heatmap data available</span>
+          </div>
+        )}
+        {data && !screenshotUrl && (
+          <div className="absolute bottom-2 left-2 text-xs text-surface-600 bg-surface-900/60 px-2 py-1 rounded">
+            No page screenshot available
           </div>
         )}
       </div>

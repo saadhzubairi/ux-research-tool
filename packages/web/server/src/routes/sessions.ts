@@ -127,17 +127,21 @@ sessionsRouter.delete('/:id', async (req, res, next) => {
       }
     }
 
-    // Try to clean up the session screenshot directory
-    const sessionDirs = new Set(
+    // Collect all parent directories from file paths, sorted deepest-first
+    // so visit-folder dirs are removed before session dirs
+    const allDirs = new Set(
       screenshots
         .filter(s => s.filePath)
-        .map(s => {
+        .flatMap(s => {
           const parts = s.filePath!.split('/')
-          parts.pop()
-          return parts.join('/')
+          parts.pop() // remove filename → visit folder or session dir
+          const visitDir = parts.join('/')
+          const sessionDir = parts.slice(0, -1).join('/')
+          return [visitDir, sessionDir]
         })
     )
-    for (const dir of sessionDirs) {
+    const sortedDirs = [...allDirs].sort((a, b) => b.length - a.length)
+    for (const dir of sortedDirs) {
       try {
         await fs.rmdir(dir)
       } catch {
@@ -371,19 +375,37 @@ sessionsRouter.get('/:id/screenshots', async (req, res, next) => {
       return
     }
 
-    const screenshots = await Screenshot.find({ sessionId })
+    const filter: Record<string, unknown> = { sessionId }
+    const urlParam = req.query.url as string | undefined
+    if (urlParam) {
+      filter.url = urlParam
+    }
+
+    const screenshots = await Screenshot.find(filter)
       .sort({ capturedAt: 1 })
       .lean()
 
-    const screenshotData = screenshots.map(s => ({
-      url: s.url,
-      scrollY: s.scrollY,
-      viewportHeight: s.viewportHeight,
-      capturedAt: s.capturedAt,
-      screenshotUrl: s.filePath
-        ? `/api/screenshots/${s.filePath.split('/').pop()}`
-        : null,
-    }))
+    const screenshotData = screenshots.map((s, i) => {
+      let screenshotUrl: string | null = null
+      if (s.filename && s.visitFolder) {
+        screenshotUrl = `/api/screenshots/${sessionId}/${s.visitFolder}/${s.filename}`
+      } else if (s.filename) {
+        screenshotUrl = `/api/screenshots/${sessionId}/${s.filename}`
+      } else if (s.filePath) {
+        screenshotUrl = `/api/screenshots/${s.filePath.split('/').pop()}`
+      }
+
+      return {
+        index: s.index ?? i,
+        visitIndex: s.visitIndex,
+        visitFolder: s.visitFolder,
+        url: s.url,
+        scrollY: s.scrollY,
+        viewportHeight: s.viewportHeight,
+        capturedAt: s.capturedAt,
+        screenshotUrl,
+      }
+    })
 
     const response: ApiResponse<typeof screenshotData> = {
       success: true,

@@ -1,4 +1,4 @@
-/** Single gaze sample from WebGazer */
+/** Single gaze sample from the eye-tracking pipeline */
 export interface GazeSample {
   x: number
   y: number

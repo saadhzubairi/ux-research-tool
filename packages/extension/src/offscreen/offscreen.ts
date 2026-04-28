@@ -230,9 +230,9 @@ let gazeFlushTimer: ReturnType<typeof setInterval> | null = null
 let gazeFlushCount = 0
 let nullPredictionCount = 0
 
-// One Euro Filter instances for smoothing gaze predictions
-const gazeFilterX = new OneEuroFilter(60, 1.5, 0.007, 1.0)
-const gazeFilterY = new OneEuroFilter(60, 1.5, 0.007, 1.0)
+// One Euro Filter instances for smoothing gaze predictions (re-created per session)
+let gazeFilterX = new OneEuroFilter(60, 1.5, 0.007, 1.0)
+let gazeFilterY = new OneEuroFilter(60, 1.5, 0.007, 1.0)
 
 // Outlier rejection — track last accepted position
 let lastAcceptedX: number | null = null
@@ -369,6 +369,8 @@ function stopGazeEngine(): void {
   }
 
   gazeBuffer = []
+  gazeFilterX = new OneEuroFilter(60, 1.5, 0.007, 1.0)
+  gazeFilterY = new OneEuroFilter(60, 1.5, 0.007, 1.0)
   lastAcceptedX = null
   lastAcceptedY = null
   nullPredictionCount = 0

@@ -53,6 +53,9 @@ function solveLinearSystem(A: number[][], b: number[]): number[] {
  * Requires at least 6 samples spanning 6 distinct iris positions.
  */
 export function solvePolynomial(samples: CalibrationSample[]): PolynomialModel {
+  if (samples.length < 6) {
+    throw new Error(`solvePolynomial requires at least 6 samples, got ${samples.length}`)
+  }
   const NC = 6
   const A = samples.map((s) => designRow(s.irisX, s.irisY))
   const bx = samples.map((s) => s.screenX)

@@ -15,19 +15,20 @@ export interface IrisData {
   leftLowerEyelid: Landmark  // landmark 145
   rightUpperEyelid: Landmark // landmark 386
   rightLowerEyelid: Landmark // landmark 374
+  noseTip: Landmark          // landmark 1
+  forehead: Landmark         // landmark 10
 }
 
 /**
  * Compute normalized iris position from face landmarks.
  *
- * Horizontal: iris center relative to eye corners (min/max for sign consistency).
- *   This gives a 0–1 value that's invariant to head position.
+ * Horizontal: iris center relative to eye corners — good signal, head-invariant.
  *
- * Vertical: raw average iris Y in image coordinates (0–1). We use the raw position
- *   because the iris barely moves vertically within the eye — the dominant vertical
- *   signal is HEAD TILT (looking down → head tilts → iris Y increases in camera).
- *   Normalizing by eyelid opening or eye width removes this crucial head-pose signal.
- *   The polynomial will learn to map raw iris Y → screen Y for each calibration session.
+ * Vertical: nose tip Y relative to forehead, normalized by face height.
+ *   The nose tip swings through a much larger arc than the iris when the head
+ *   tilts (looking down → head pitches forward → nose moves DOWN in camera).
+ *   This gives ~5-10x more vertical variation than raw iris Y.
+ *   Normalized by face height (forehead-to-nose distance) for distance invariance.
  */
 export function normalizeIrisPosition(data: IrisData): { x: number; y: number } {
   // Horizontal: normalized iris-in-eye position (good signal, head-invariant)
@@ -39,12 +40,19 @@ export function normalizeIrisPosition(data: IrisData): { x: number; y: number } 
   const rMaxX = Math.max(data.rightInnerCorner.x, data.rightOuterCorner.x)
   const rTx = (data.rightIrisCenter.x - rMinX) / (rMaxX - rMinX)
 
-  // Vertical: raw iris Y in image coords (captures head tilt — the dominant signal)
-  const avgIrisY = (data.leftIrisCenter.y + data.rightIrisCenter.y) / 2
+  // Vertical: nose tip position relative to forehead, normalized by face height
+  // When looking down: head pitches → nose tip drops → noseTipY increases
+  // Face height (forehead to nose) provides scale invariance
+  const faceHeight = Math.abs(data.noseTip.y - data.forehead.y)
+  const avgEyeY = (data.leftIrisCenter.y + data.rightIrisCenter.y) / 2
+  // How far down the nose is relative to the eyes, scaled by face size
+  const verticalFeature = faceHeight > 0.001
+    ? (data.noseTip.y - avgEyeY) / faceHeight
+    : data.noseTip.y
 
   return {
     x: (lTx + rTx) / 2,
-    y: avgIrisY,
+    y: verticalFeature,
   }
 }
 
@@ -60,6 +68,8 @@ export const IRIS_LANDMARKS = {
   leftLowerEyelid: 145,
   rightUpperEyelid: 386,
   rightLowerEyelid: 374,
+  noseTip: 1,
+  forehead: 10,
 } as const
 
 /** Extract IrisData from a MediaPipe NormalizedLandmark array (478 landmarks). */
@@ -76,5 +86,7 @@ export function extractIrisData(landmarks: Landmark[]): IrisData {
     leftLowerEyelid: landmarks[L.leftLowerEyelid],
     rightUpperEyelid: landmarks[L.rightUpperEyelid],
     rightLowerEyelid: landmarks[L.rightLowerEyelid],
+    noseTip: landmarks[L.noseTip],
+    forehead: landmarks[L.forehead],
   }
 }

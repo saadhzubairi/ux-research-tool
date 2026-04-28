@@ -18,28 +18,29 @@ export interface IrisData {
 }
 
 /**
- * Compute normalized iris position (0–1) from face landmarks.
+ * Compute normalized iris position from face landmarks.
  *
  * Horizontal: iris center relative to eye corners (min/max for sign consistency).
- * Vertical: iris center relative to upper/lower eyelids.
+ * Vertical: iris deviation from eye center, normalized by eye WIDTH (not eyelid
+ * opening, which is too small — only ~2-3px at 640px — producing noisy values).
  * Both eyes averaged for stability.
  */
 export function normalizeIrisPosition(data: IrisData): { x: number; y: number } {
+  // Left eye
   const lMinX = Math.min(data.leftInnerCorner.x, data.leftOuterCorner.x)
   const lMaxX = Math.max(data.leftInnerCorner.x, data.leftOuterCorner.x)
-  const lTx = (data.leftIrisCenter.x - lMinX) / (lMaxX - lMinX)
+  const lEyeWidth = lMaxX - lMinX
+  const lTx = (data.leftIrisCenter.x - lMinX) / lEyeWidth
+  const lEyeCenterY = (data.leftUpperEyelid.y + data.leftLowerEyelid.y) / 2
+  const lTy = (data.leftIrisCenter.y - lEyeCenterY) / lEyeWidth
 
-  const lTy =
-    (data.leftIrisCenter.y - data.leftUpperEyelid.y) /
-    (data.leftLowerEyelid.y - data.leftUpperEyelid.y)
-
+  // Right eye
   const rMinX = Math.min(data.rightInnerCorner.x, data.rightOuterCorner.x)
   const rMaxX = Math.max(data.rightInnerCorner.x, data.rightOuterCorner.x)
-  const rTx = (data.rightIrisCenter.x - rMinX) / (rMaxX - rMinX)
-
-  const rTy =
-    (data.rightIrisCenter.y - data.rightUpperEyelid.y) /
-    (data.rightLowerEyelid.y - data.rightUpperEyelid.y)
+  const rEyeWidth = rMaxX - rMinX
+  const rTx = (data.rightIrisCenter.x - rMinX) / rEyeWidth
+  const rEyeCenterY = (data.rightUpperEyelid.y + data.rightLowerEyelid.y) / 2
+  const rTy = (data.rightIrisCenter.y - rEyeCenterY) / rEyeWidth
 
   return {
     x: (lTx + rTx) / 2,

@@ -17,6 +17,7 @@ export interface UseMediaPipeReturn {
   recordScreenPosition: (x: number, y: number) => void
   exportModel: () => Promise<PolynomialModel | null>
   getPrediction: () => { x: number; y: number } | null
+  resetCalibration: () => void
 }
 
 export function useMediaPipe(): UseMediaPipeReturn {
@@ -114,6 +115,13 @@ export function useMediaPipe(): UseMediaPipeReturn {
 
   const getPrediction = useCallback(() => predictionRef.current, [])
 
+  const resetCalibration = useCallback(() => {
+    samplesRef.current = []
+    modelRef.current = null
+    predictionRef.current = null
+    setPrediction(null)
+  }, [])
+
   const stop = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
     closeFaceLandmarker()
@@ -146,5 +154,6 @@ export function useMediaPipe(): UseMediaPipeReturn {
     recordScreenPosition,
     exportModel,
     getPrediction,
+    resetCalibration,
   }
 }

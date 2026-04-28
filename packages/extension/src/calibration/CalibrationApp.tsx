@@ -76,8 +76,9 @@ export function CalibrationApp() {
   }, [])
 
   const handleRecalibrate = useCallback(() => {
+    mediapipe.resetCalibration()
     setStage('calibration')
-  }, [])
+  }, [mediapipe])
 
   const handleStartTracking = useCallback(() => {
     setStage('tab-picker')

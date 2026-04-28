@@ -10,7 +10,7 @@
 //   - heatmapOverlay — live heatmap canvas
 //
 // Gaze samples arrive via messages from the offscreen document (where
-// WebGazer runs inside a sandboxed iframe to satisfy CSP requirements).
+// MediaPipe Face Mesh runs for gaze prediction).
 //
 // Idempotent: re-injection does not create duplicate trackers.
 // ---------------------------------------------------------------------------

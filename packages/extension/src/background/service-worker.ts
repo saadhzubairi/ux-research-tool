@@ -232,7 +232,7 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
       type: 'start_tracking',
       sessionId,
       settings,
-      heatmapEnabled: true,
+      heatmapEnabled: false,
     }
     let injected = false
     let trackingSent = false
@@ -674,7 +674,7 @@ async function reattachTracking(tabId: number): Promise<void> {
     type: 'start_tracking',
     sessionId: state.currentSessionId,
     settings,
-    heatmapEnabled: true,
+    heatmapEnabled: false,
   }
 
   // The manifest-declared content script auto-injects at document_idle,

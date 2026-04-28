@@ -27,7 +27,7 @@ export function CalibrationApp() {
     async (mediaStream: MediaStream) => {
       // Pass existing stream — useMediaPipe reuses it for frame capture
       await mediapipe.start(mediaStream)
-      setStream(null)
+      setStream(mediaStream)
       setStage('face-check')
     },
     [mediapipe]
@@ -41,7 +41,9 @@ export function CalibrationApp() {
     setStage('calibration')
   }, [])
 
-  const handleCalibrationComplete = useCallback(() => {
+  const handleCalibrationComplete = useCallback(async () => {
+    // Solve the polynomial model NOW — before validation needs predictions
+    await exportModelRef.current()
     setStage('validation')
   }, [])
 

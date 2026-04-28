@@ -1,6 +1,8 @@
 import { WS_CONFIG } from '@gazekit/shared'
 import type { ExtensionMessage, GazeSample, ServerMessage } from '@gazekit/shared'
 import type { ServiceWorkerToOffscreenMessage } from '../types/extension'
+import { initFaceLandmarker, detectGaze, closeFaceLandmarker } from './faceLandmarker'
+import { predictGaze, type PolynomialModel } from './polynomial'
 
 // ---------------------------------------------------------------------------
 // One Euro Filter — adaptive low-pass filter for gaze smoothing
@@ -217,20 +219,16 @@ class WebSocketClient {
 const client = new WebSocketClient()
 
 // ---------------------------------------------------------------------------
-// Gaze Engine — runs WebGazer inside a sandbox iframe
+// Gaze Engine — runs MediaPipe FaceLandmarker directly in the offscreen document
 // ---------------------------------------------------------------------------
 
-let gazeIframe: HTMLIFrameElement | null = null
 let gazeVideo: HTMLVideoElement | null = null
-let gazeCanvas: HTMLCanvasElement | null = null
-let gazeCtx: CanvasRenderingContext2D | null = null
 let gazeStream: MediaStream | null = null
 let gazeFrameLoop: ReturnType<typeof setTimeout> | null = null
 let gazeBuffer: GazeSample[] = []
 let gazeFlushTimer: ReturnType<typeof setInterval> | null = null
 let gazeFlushCount = 0
 let nullPredictionCount = 0
-let totalPredictionCount = 0
 
 // One Euro Filter instances for smoothing gaze predictions
 const gazeFilterX = new OneEuroFilter(60, 1.5, 0.007, 1.0)
@@ -240,136 +238,63 @@ const gazeFilterY = new OneEuroFilter(60, 1.5, 0.007, 1.0)
 let lastAcceptedX: number | null = null
 let lastAcceptedY: number | null = null
 
-async function loadAndImportModel(): Promise<void> {
-  try {
-    // Offscreen documents don't have chrome.storage access — ask the service worker
-    const response = await chrome.runtime.sendMessage({ type: 'get_calibration_model' }) as { model: Record<string, unknown> | null }
-    const modelData = response?.model
-    if (!modelData || !(modelData.screenXClicks as unknown[])?.length) {
-      console.warn('[GazeKit Offscreen] ❌ No calibration model — predictions will be null. Recalibrate!')
-      return
-    }
-    console.log('[GazeKit Offscreen] ✓ Got model from service worker:', (modelData.screenXClicks as unknown[]).length, 'training points')
-    if (gazeIframe?.contentWindow) {
-      gazeIframe.contentWindow.postMessage(
-        { source: 'gazekit-parent', type: 'import_model', data: modelData },
-        '*',
-      )
-    } else {
-      console.error('[GazeKit Offscreen] ❌ Cannot import model — sandbox iframe not available')
-    }
-  } catch (err) {
-    console.error('[GazeKit Offscreen] ❌ Failed to load calibration model:', err)
+let polynomialModel: PolynomialModel | null = null
+
+async function loadPolynomialModel(): Promise<void> {
+  const stored = await chrome.storage.local.get('gazekit:model')
+  const data = stored['gazekit:model']
+  if (data?.coeffsX && data?.coeffsY) {
+    polynomialModel = { coeffsX: data.coeffsX, coeffsY: data.coeffsY }
+    console.log('[GazeKit Offscreen] Polynomial model loaded')
+  } else {
+    console.warn('[GazeKit Offscreen] No calibration model found')
   }
 }
 
-function handleSandboxMessage(event: MessageEvent): void {
-  const msg = event.data
-  if (msg?.source !== 'gazekit-sandbox') return
+function startDetectionLoop(): void {
+  const detect = () => {
+    if (!gazeVideo || gazeVideo.readyState < 2) {
+      gazeFrameLoop = setTimeout(detect, 16)
+      return
+    }
 
-  switch (msg.type) {
-    case 'loaded': {
-      console.log('[GazeKit Offscreen] Sandbox loaded, starting frame loop...')
-      startFrameLoop()
-      // Give the frame buffer 200ms to fill, then tell sandbox to init WebGazer
-      setTimeout(() => {
-        if (!gazeCanvas || !gazeIframe?.contentWindow) {
-          console.error('[GazeKit Offscreen] ❌ Cannot send init — canvas or iframe missing')
-          return
-        }
-        const w = gazeCanvas.width
-        const h = gazeCanvas.height
-        console.log(`[GazeKit Offscreen] Sending init to sandbox: ${w}x${h}`)
-        // FIX: Send width/height at top level (sandbox reads msg.width, not msg.data.width)
-        gazeIframe.contentWindow.postMessage(
-          { source: 'gazekit-parent', type: 'init', width: w, height: h },
-          '*',
-        )
-      }, 200)
-      break
-    }
-    case 'ready': {
-      console.log('[GazeKit Offscreen] ✓ Gaze engine ready, importing calibration model...')
-      void loadAndImportModel().then(() => {
-        startGazeFlush()
-        console.log('[GazeKit Offscreen] ✓ Pipeline active: sandbox → offscreen → service worker')
-      })
-      break
-    }
-    case 'model_imported': {
-      if (msg.data?.success) {
-        console.log('[GazeKit Offscreen] ✓ Calibration model imported successfully')
-      } else {
-        console.warn('[GazeKit Offscreen] ❌ Calibration model import failed:', msg.data?.error)
-      }
-      break
-    }
-    case 'gaze': {
-      totalPredictionCount++
-      const pred = msg.data?.prediction
-      if (pred) {
-        // Outlier rejection: skip if >400px jump from last accepted position
-        if (lastAcceptedX !== null && lastAcceptedY !== null) {
-          const dx = pred.x - lastAcceptedX
-          const dy = pred.y - lastAcceptedY
-          if (Math.sqrt(dx * dx + dy * dy) > 400) {
-            nullPredictionCount++
-            break
-          }
-        }
-        // Apply One Euro Filter for smoothing
-        const now = Date.now()
-        const filteredX = gazeFilterX.filter(pred.x, now)
-        const filteredY = gazeFilterY.filter(pred.y, now)
-        lastAcceptedX = filteredX
-        lastAcceptedY = filteredY
-        gazeBuffer.push({ x: filteredX, y: filteredY, ts: now, conf: null })
-        nullPredictionCount = 0 // reset
-      } else {
-        nullPredictionCount++
-      }
-      // Log periodically
-      if (totalPredictionCount === 1 || totalPredictionCount === 10 || totalPredictionCount % 200 === 0) {
-        console.log(
-          `[GazeKit Offscreen] Prediction #${totalPredictionCount}: ${pred ? `(${pred.x.toFixed(0)}, ${pred.y.toFixed(0)})` : 'NULL'}`
-          + ` | buffer=${gazeBuffer.length} | face=${msg.data?.faceDetected}`
-          + ` | nullStreak=${nullPredictionCount}`,
-        )
-      }
-      // Warn if all predictions are null (no calibration model)
+    const raw = detectGaze(gazeVideo, performance.now())
+
+    if (!raw.faceDetected || !raw.normalizedIris || !polynomialModel) {
+      nullPredictionCount++
       if (nullPredictionCount === 50) {
-        console.warn('[GazeKit Offscreen] ⚠️ 50 consecutive null predictions — calibration model may not be loaded. Recalibrate!')
+        console.warn('[GazeKit Offscreen] 50 consecutive null predictions — check calibration')
       }
-      break
-    }
-    case 'error': {
-      console.error('[GazeKit Offscreen] ❌ Sandbox error:', msg.data)
-      break
-    }
-    case 'log': {
-      console.log('[GazeKit Sandbox]', msg.data)
-      break
-    }
-  }
-}
-
-function startFrameLoop(): void {
-  const sendFrame = () => {
-    if (!gazeVideo || !gazeCtx || !gazeCanvas || !gazeIframe?.contentWindow) {
-      gazeFrameLoop = setTimeout(sendFrame, 16)
+      gazeFrameLoop = setTimeout(detect, 16)
       return
     }
-    gazeCtx.drawImage(gazeVideo, 0, 0)
-    createImageBitmap(gazeCanvas).then((bitmap) => {
-      gazeIframe?.contentWindow?.postMessage(
-        { source: 'gazekit-parent', type: 'frame', bitmap },
-        '*',
-        [bitmap],
-      )
-    }).catch(() => { /* non-fatal */ })
-    gazeFrameLoop = setTimeout(sendFrame, 16) // ~30fps
+
+    nullPredictionCount = 0
+    const pred = predictGaze(polynomialModel, raw.normalizedIris.x, raw.normalizedIris.y)
+    const now = Date.now()
+
+    // Outlier rejection (>400px jump)
+    if (lastAcceptedX !== null && lastAcceptedY !== null) {
+      const dx = pred.x - lastAcceptedX
+      const dy = pred.y - lastAcceptedY
+      if (Math.sqrt(dx * dx + dy * dy) > 400) {
+        gazeFrameLoop = setTimeout(detect, 16)
+        return
+      }
+    }
+
+    // One Euro Filter expects millisecond timestamps (it divides by 1000 internally).
+    // Pass Date.now() directly — do NOT divide by 1000 here.
+    const filteredX = gazeFilterX.filter(pred.x, now)
+    const filteredY = gazeFilterY.filter(pred.y, now)
+    lastAcceptedX = filteredX
+    lastAcceptedY = filteredY
+
+    gazeBuffer.push({ x: filteredX, y: filteredY, ts: now, conf: null })
+    gazeFrameLoop = setTimeout(detect, 16)
   }
-  gazeFrameLoop = setTimeout(sendFrame, 16)
+
+  detect()
 }
 
 function startGazeFlush(): void {
@@ -391,85 +316,63 @@ function startGazeFlush(): void {
 }
 
 async function startGazeEngine(): Promise<void> {
-  console.log('[GazeKit Offscreen] Starting gaze engine...')
+  try {
+    gazeStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+    })
 
-  // Reset counters and filter state
-  gazeFlushCount = 0
-  nullPredictionCount = 0
-  totalPredictionCount = 0
-  lastAcceptedX = null
-  lastAcceptedY = null
+    gazeVideo = document.createElement('video')
+    gazeVideo.srcObject = gazeStream
+    gazeVideo.width = 640
+    gazeVideo.height = 480
+    gazeVideo.autoplay = true
+    gazeVideo.playsInline = true
+    gazeVideo.muted = true
+    gazeVideo.style.position = 'fixed'
+    gazeVideo.style.opacity = '0'
+    gazeVideo.style.pointerEvents = 'none'
+    document.body.appendChild(gazeVideo)
+    await gazeVideo.play()
 
-  // 1. Get camera
-  gazeStream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 640, height: 480, facingMode: 'user' },
-  })
-  console.log('[GazeKit Offscreen] ✓ Camera acquired')
+    const wasmPath = chrome.runtime.getURL('mediapipe/wasm')
+    const modelPath = chrome.runtime.getURL('mediapipe/models/face_landmarker.task')
+    await initFaceLandmarker(wasmPath, modelPath)
 
-  // 2. Hidden video element to read frames
-  gazeVideo = document.createElement('video')
-  gazeVideo.srcObject = gazeStream
-  gazeVideo.muted = true
-  gazeVideo.playsInline = true
-  gazeVideo.style.display = 'none'
-  document.body.appendChild(gazeVideo)
-  await gazeVideo.play()
+    await loadPolynomialModel()
 
-  const vw = gazeVideo.videoWidth || 640
-  const vh = gazeVideo.videoHeight || 480
-  console.log(`[GazeKit Offscreen] ✓ Video playing: ${vw}x${vh}`)
+    startDetectionLoop()
+    startGazeFlush()
 
-  // 3. Canvas for frame capture → ImageBitmap transfer
-  gazeCanvas = document.createElement('canvas')
-  gazeCanvas.width = vw
-  gazeCanvas.height = vh
-  gazeCtx = gazeCanvas.getContext('2d')!
-
-  // 4. Sandbox iframe — WebGazer runs here (has unsafe-eval CSP)
-  gazeIframe = document.createElement('iframe')
-  gazeIframe.src = chrome.runtime.getURL('src/calibration/sandbox.html')
-  gazeIframe.style.cssText =
-    'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;pointer-events:none;'
-  document.body.appendChild(gazeIframe)
-  console.log('[GazeKit Offscreen] ✓ Sandbox iframe created:', gazeIframe.src)
-
-  // 5. Listen for sandbox postMessages
-  window.addEventListener('message', handleSandboxMessage)
-
-  console.log('[GazeKit Offscreen] ✓ Gaze engine setup complete, waiting for sandbox to load...')
+    console.log('[GazeKit Offscreen] Gaze engine started (MediaPipe)')
+  } catch (err) {
+    console.error('[GazeKit Offscreen] Failed to start gaze engine:', err)
+  }
 }
 
 function stopGazeEngine(): void {
-  if (gazeFlushTimer) {
-    clearInterval(gazeFlushTimer)
-    gazeFlushTimer = null
-  }
-  if (gazeFrameLoop !== null) {
-    clearTimeout(gazeFrameLoop)
-    gazeFrameLoop = null
-  }
-  window.removeEventListener('message', handleSandboxMessage)
-  if (gazeIframe?.contentWindow) {
-    gazeIframe.contentWindow.postMessage(
-      { source: 'gazekit-parent', type: 'stop' },
-      '*',
-    )
-  }
-  if (gazeIframe) {
-    gazeIframe.remove()
-    gazeIframe = null
+  if (gazeFrameLoop) clearTimeout(gazeFrameLoop)
+  gazeFrameLoop = null
+
+  if (gazeFlushTimer) clearInterval(gazeFlushTimer)
+  gazeFlushTimer = null
+
+  closeFaceLandmarker()
+  polynomialModel = null
+
+  if (gazeVideo) {
+    gazeVideo.remove()
+    gazeVideo = null
   }
   if (gazeStream) {
     gazeStream.getTracks().forEach((t) => t.stop())
     gazeStream = null
   }
-  if (gazeVideo) {
-    gazeVideo.remove()
-    gazeVideo = null
-  }
-  gazeCanvas = null
-  gazeCtx = null
+
   gazeBuffer = []
+  lastAcceptedX = null
+  lastAcceptedY = null
+  nullPredictionCount = 0
+
   console.log('[GazeKit Offscreen] Gaze engine stopped')
 }
 

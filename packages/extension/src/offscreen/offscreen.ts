@@ -262,8 +262,11 @@ function startDetectionLoop(): void {
 
     if (!raw.faceDetected || !raw.normalizedIris || !polynomialModel) {
       nullPredictionCount++
-      if (nullPredictionCount === 50) {
-        console.warn('[GazeKit Offscreen] 50 consecutive null predictions — check calibration')
+      if (nullPredictionCount === 50 || nullPredictionCount === 200) {
+        console.warn(
+          `[GazeKit Offscreen] ${nullPredictionCount} consecutive null predictions:`,
+          `face=${raw.faceDetected}, iris=${!!raw.normalizedIris}, model=${!!polynomialModel}`,
+        )
       }
       gazeFrameLoop = setTimeout(detect, 16)
       return
@@ -339,6 +342,7 @@ async function startGazeEngine(): Promise<void> {
     await initFaceLandmarker(wasmPath, modelPath)
 
     await loadPolynomialModel()
+    console.log('[GazeKit Offscreen] Model state:', polynomialModel ? `loaded (${polynomialModel.coeffsX.length} coeffs)` : 'NULL — no gaze predictions will be produced!')
 
     startDetectionLoop()
     startGazeFlush()

@@ -17,7 +17,7 @@ const SessionSchema = new Schema({
     resolution: { w: Number, h: Number },
   },
   calibration: {
-    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell'] },
+    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell', '6-point-polynomial'] },
     avgErrorPx: Number,
     precisionPx: Number,
     qualityScore: Number,

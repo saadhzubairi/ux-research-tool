@@ -34,3 +34,6 @@ data/screenshots/
 
 # TypeScript
 *.tsbuildinfo
+
+# MediaPipe model files (downloaded at build time)
+packages/extension/public/mediapipe/models/*.task

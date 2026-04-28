@@ -29,6 +29,7 @@ export function useMediaPipe(): UseMediaPipeReturn {
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number>(0)
   const predictionRef = useRef<{ x: number; y: number } | null>(null)
+  const normalizedIrisRef = useRef<{ x: number; y: number } | null>(null)
   const samplesRef = useRef<CalibrationSample[]>([])
   const modelRef = useRef<PolynomialModel | null>(null)
 
@@ -68,15 +69,14 @@ export function useMediaPipe(): UseMediaPipeReturn {
         const raw = detectGaze(videoRef.current, performance.now())
         setFaceDetected(raw.faceDetected)
 
-        if (raw.normalizedIris && modelRef.current) {
-          const pred = predictGaze(modelRef.current, raw.normalizedIris.x, raw.normalizedIris.y)
-          predictionRef.current = pred
-          setPrediction(pred)
-        } else if (raw.normalizedIris) {
-          // During calibration (no model yet), still update prediction ref
-          // with raw normalized values for face detection feedback
-          predictionRef.current = null
-          setPrediction(null)
+        if (raw.normalizedIris) {
+          normalizedIrisRef.current = raw.normalizedIris
+
+          if (modelRef.current) {
+            const pred = predictGaze(modelRef.current, raw.normalizedIris.x, raw.normalizedIris.y)
+            predictionRef.current = pred
+            setPrediction(pred)
+          }
         }
 
         rafRef.current = requestAnimationFrame(loop)
@@ -88,13 +88,13 @@ export function useMediaPipe(): UseMediaPipeReturn {
   }, [])
 
   const recordScreenPosition = useCallback((x: number, y: number) => {
-    if (!videoRef.current || videoRef.current.readyState < 2) return
-
-    const raw = detectGaze(videoRef.current, performance.now())
-    if (raw.normalizedIris) {
+    // Use the latest iris data from the prediction loop — do NOT call detectGaze()
+    // again, as running two concurrent MediaPipe inferences causes severe lag.
+    const iris = normalizedIrisRef.current
+    if (iris) {
       samplesRef.current.push({
-        irisX: raw.normalizedIris.x,
-        irisY: raw.normalizedIris.y,
+        irisX: iris.x,
+        irisY: iris.y,
         screenX: x,
         screenY: y,
       })

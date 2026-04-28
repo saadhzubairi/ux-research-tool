@@ -74,15 +74,29 @@ export function IdleView({ status, onStartTracking }: IdleViewProps) {
         )}
       </div>
 
-      <button
-        onClick={handleOpenDashboard}
-        className="flex items-center justify-center gap-1.5 text-xs text-indigo-600 transition-colors hover:text-indigo-500"
-      >
-        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-        </svg>
-        Open Dashboard
-      </button>
+      <div className="flex items-center justify-center gap-4">
+        <button
+          onClick={handleOpenDashboard}
+          className="flex items-center gap-1.5 text-xs text-indigo-600 transition-colors hover:text-indigo-500"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+          Dashboard
+        </button>
+        {hasCalibration && (
+          <button
+            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('src/playground/playground.html') })}
+            className="flex items-center gap-1.5 text-xs text-indigo-600 transition-colors hover:text-indigo-500"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            Playground
+          </button>
+        )}
+      </div>
     </div>
   )
 }

@@ -32,6 +32,7 @@ export default defineConfig({
         popup: resolve(__dirname, 'src/popup/popup.html'),
         offscreen: resolve(__dirname, 'src/offscreen/offscreen.html'),
         calibration: resolve(__dirname, 'src/calibration/calibration.html'),
+        playground: resolve(__dirname, 'src/playground/playground.html'),
       },
     },
     outDir: 'dist',

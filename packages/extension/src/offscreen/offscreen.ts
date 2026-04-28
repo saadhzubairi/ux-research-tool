@@ -279,11 +279,13 @@ function startDetectionLoop(): void {
     const pred = predictGaze(polynomialModel, raw.normalizedIris.x, raw.normalizedIris.y)
     const now = Date.now()
 
-    // Outlier rejection (>400px jump)
+    // Outlier rejection — skip predictions that jump too far from last accepted
+    // Threshold is generous (screen diagonal) to avoid dropping valid noisy predictions
+    const OUTLIER_THRESHOLD = 1200
     if (lastAcceptedX !== null && lastAcceptedY !== null) {
       const dx = pred.x - lastAcceptedX
       const dy = pred.y - lastAcceptedY
-      if (Math.sqrt(dx * dx + dy * dy) > 400) {
+      if (Math.sqrt(dx * dx + dy * dy) > OUTLIER_THRESHOLD) {
         gazeFrameLoop = setTimeout(detect, 16)
         return
       }

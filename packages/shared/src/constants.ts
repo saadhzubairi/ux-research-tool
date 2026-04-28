@@ -1,15 +1,18 @@
 export { WS_CONFIG } from './types/protocol'
 
 export const CALIBRATION_POINTS = [
-  // Top row (3 points)
-  { x: 0.2, y: 0.2 },
-  { x: 0.5, y: 0.2 },
-  { x: 0.8, y: 0.2 },
-  // Center
+  // Top row
+  { x: 0.15, y: 0.15 },
+  { x: 0.5, y: 0.15 },
+  { x: 0.85, y: 0.15 },
+  // Middle row
+  { x: 0.15, y: 0.5 },
   { x: 0.5, y: 0.5 },
-  // Bottom corners (2 points)
-  { x: 0.2, y: 0.8 },
-  { x: 0.8, y: 0.8 },
+  { x: 0.85, y: 0.5 },
+  // Bottom row
+  { x: 0.15, y: 0.85 },
+  { x: 0.5, y: 0.85 },
+  { x: 0.85, y: 0.85 },
 ]
 
 export const VALIDATION_POINTS = [

@@ -559,6 +559,11 @@ async function handleMessage(message: InboundMessage): Promise<unknown> {
       return { received: true }
     }
 
+    case 'get_calibration_model': {
+      const stored = await chrome.storage.local.get('gazekit:model')
+      return { model: stored['gazekit:model'] ?? null }
+    }
+
     case 'gaze_samples': {
       // Forward gaze samples from offscreen → content script for heatmap + batching
       if (state.activeTabId !== null && state.isTracking) {

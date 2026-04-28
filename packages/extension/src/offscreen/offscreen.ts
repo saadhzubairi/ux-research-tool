@@ -241,8 +241,11 @@ let lastAcceptedY: number | null = null
 let polynomialModel: PolynomialModel | null = null
 
 async function loadPolynomialModel(): Promise<void> {
-  const stored = await chrome.storage.local.get('gazekit:model')
-  const data = stored['gazekit:model']
+  // Offscreen documents don't have chrome.storage access — ask the service worker
+  const response = await chrome.runtime.sendMessage({ type: 'get_calibration_model' }) as
+    | { model?: { coeffsX?: number[]; coeffsY?: number[] } }
+    | undefined
+  const data = response?.model
   if (data?.coeffsX && data?.coeffsY) {
     polynomialModel = { coeffsX: data.coeffsX, coeffsY: data.coeffsY }
     console.log('[GazeKit Offscreen] Polynomial model loaded')

@@ -39,7 +39,7 @@ export interface GazeBatch {
 }
 
 export interface CalibrationResult {
-  method: '9-point' | '13-point' | '21-point' | '9-point-dwell'
+  method: '9-point' | '13-point' | '21-point' | '9-point-dwell' | '6-point-polynomial'
   avgErrorPx: number
   precisionPx: number
   qualityScore: number
@@ -67,9 +67,9 @@ export interface SessionMeta {
   }
   calibration: CalibrationResult
   tracking: {
-    library: 'webgazer'
+    library: 'webgazer' | 'mediapipe'
     version: string
-    regressionModel: 'ridge'
+    regressionModel: 'ridge' | 'polynomial'
     avgFps: number
   }
   pages: Array<{

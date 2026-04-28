@@ -1,18 +1,22 @@
 export { WS_CONFIG } from './types/protocol'
 
-// Corners + diamond + center — 9 well-spaced points
-// Corners anchor the extremes, diamond fills the interior, center ties it together
 export const CALIBRATION_POINTS = [
-  // 4 corners
-  { x: 0.1, y: 0.1 }, { x: 0.9, y: 0.1 },
-  { x: 0.1, y: 0.9 }, { x: 0.9, y: 0.9 },
-  // 4 diamond points
+  // Top row (3 points)
+  { x: 0.2, y: 0.2 },
   { x: 0.5, y: 0.2 },
-  { x: 0.2, y: 0.5 }, { x: 0.8, y: 0.5 },
-  { x: 0.5, y: 0.8 },
-  // center
+  { x: 0.8, y: 0.2 },
+  // Center
   { x: 0.5, y: 0.5 },
-] as const
+  // Bottom corners (2 points)
+  { x: 0.2, y: 0.8 },
+  { x: 0.8, y: 0.8 },
+]
+
+export const VALIDATION_POINTS = [
+  { x: 0.35, y: 0.35 },
+  { x: 0.65, y: 0.65 },
+  { x: 0.50, y: 0.75 },
+]
 
 export const GAZE_CONFIDENCE_THRESHOLD = 0.4
 export const FIXATION_DISPERSION_THRESHOLD_PX = 50

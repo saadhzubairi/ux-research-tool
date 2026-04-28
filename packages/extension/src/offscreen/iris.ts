@@ -21,30 +21,30 @@ export interface IrisData {
  * Compute normalized iris position from face landmarks.
  *
  * Horizontal: iris center relative to eye corners (min/max for sign consistency).
- * Vertical: iris deviation from eye center, normalized by eye WIDTH (not eyelid
- * opening, which is too small — only ~2-3px at 640px — producing noisy values).
- * Both eyes averaged for stability.
+ *   This gives a 0–1 value that's invariant to head position.
+ *
+ * Vertical: raw average iris Y in image coordinates (0–1). We use the raw position
+ *   because the iris barely moves vertically within the eye — the dominant vertical
+ *   signal is HEAD TILT (looking down → head tilts → iris Y increases in camera).
+ *   Normalizing by eyelid opening or eye width removes this crucial head-pose signal.
+ *   The polynomial will learn to map raw iris Y → screen Y for each calibration session.
  */
 export function normalizeIrisPosition(data: IrisData): { x: number; y: number } {
-  // Left eye
+  // Horizontal: normalized iris-in-eye position (good signal, head-invariant)
   const lMinX = Math.min(data.leftInnerCorner.x, data.leftOuterCorner.x)
   const lMaxX = Math.max(data.leftInnerCorner.x, data.leftOuterCorner.x)
-  const lEyeWidth = lMaxX - lMinX
-  const lTx = (data.leftIrisCenter.x - lMinX) / lEyeWidth
-  const lEyeCenterY = (data.leftUpperEyelid.y + data.leftLowerEyelid.y) / 2
-  const lTy = (data.leftIrisCenter.y - lEyeCenterY) / lEyeWidth
+  const lTx = (data.leftIrisCenter.x - lMinX) / (lMaxX - lMinX)
 
-  // Right eye
   const rMinX = Math.min(data.rightInnerCorner.x, data.rightOuterCorner.x)
   const rMaxX = Math.max(data.rightInnerCorner.x, data.rightOuterCorner.x)
-  const rEyeWidth = rMaxX - rMinX
-  const rTx = (data.rightIrisCenter.x - rMinX) / rEyeWidth
-  const rEyeCenterY = (data.rightUpperEyelid.y + data.rightLowerEyelid.y) / 2
-  const rTy = (data.rightIrisCenter.y - rEyeCenterY) / rEyeWidth
+  const rTx = (data.rightIrisCenter.x - rMinX) / (rMaxX - rMinX)
+
+  // Vertical: raw iris Y in image coords (captures head tilt — the dominant signal)
+  const avgIrisY = (data.leftIrisCenter.y + data.rightIrisCenter.y) / 2
 
   return {
     x: (lTx + rTx) / 2,
-    y: (lTy + rTy) / 2,
+    y: avgIrisY,
   }
 }
 

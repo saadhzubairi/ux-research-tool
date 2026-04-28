@@ -17,11 +17,11 @@ describe('normalizeIrisPosition', () => {
     }
   }
 
-  it('returns x~0.5 and y~0 when iris is centered in both eyes', () => {
+  it('returns x~0.5 and y = raw iris Y when centered', () => {
     const result = normalizeIrisPosition(centered())
     expect(result.x).toBeCloseTo(0.5, 1)
-    // y is iris deviation from eye center, normalized by eye width → ~0 when centered
-    expect(result.y).toBeCloseTo(0, 1)
+    // y is raw average iris Y in image coords (0.35 in test data)
+    expect(result.y).toBeCloseTo(0.35, 2)
   })
 
   it('produces consistent x when both eyes look right', () => {
@@ -42,13 +42,14 @@ describe('normalizeIrisPosition', () => {
     expect(result.x).toBeLessThan(0.5)
   })
 
-  it('produces negative y when iris is above eye center (looking up)', () => {
+  it('produces smaller y when looking up (iris moves up in image)', () => {
     const data = centered()
     data.leftIrisCenter = { x: 0.60, y: 0.33, z: 0 }
     data.rightIrisCenter = { x: 0.40, y: 0.33, z: 0 }
 
     const result = normalizeIrisPosition(data)
-    expect(result.y).toBeLessThan(0)
+    // Raw iris Y is 0.33, which is less than centered value of 0.35
+    expect(result.y).toBeLessThan(0.35)
   })
 
   it('handles right eye corner reversal via min/max', () => {

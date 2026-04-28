@@ -21,7 +21,7 @@ export function ResultsStep({
     savedRef.current = true
 
     const calibration: CalibrationResult = {
-      method: '9-point-dwell',
+      method: '6-point-polynomial',
       avgErrorPx,
       precisionPx: avgErrorPx * 0.6,
       qualityScore: avgErrorPx < 80 ? 0.9 : avgErrorPx < 150 ? 0.7 : avgErrorPx < 200 ? 0.5 : 0.3,

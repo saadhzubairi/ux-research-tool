@@ -1,9 +1,8 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { useWebGazer } from './hooks/useWebGazer'
+import React, { useState, useCallback, useRef } from 'react'
+import { useMediaPipe } from './hooks/useMediaPipe'
 import { VideoPreview } from './components/VideoPreview'
 import { CameraStep } from './steps/CameraStep'
 import { FaceCheckStep } from './steps/FaceCheckStep'
-import { LibraryCheckStep } from './steps/LibraryCheckStep'
 import { CalibrationStep } from './steps/CalibrationStep'
 import { ValidationStep } from './steps/ValidationStep'
 import { ResultsStep } from './steps/ResultsStep'
@@ -12,7 +11,6 @@ import { TabPickerStep } from './steps/TabPickerStep'
 type CalibrationStage =
   | 'camera'
   | 'face-check'
-  | 'library-check'
   | 'calibration'
   | 'validation'
   | 'results'
@@ -23,16 +21,16 @@ export function CalibrationApp() {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [avgErrorPx, setAvgErrorPx] = useState(0)
   const faceDetectedRef = useRef(false)
-  const webgazer = useWebGazer()
+  const mediapipe = useMediaPipe()
 
   const handleCameraNext = useCallback(
     async (mediaStream: MediaStream) => {
-      // Pass existing stream — useWebGazer reuses it for frame capture
-      await webgazer.start(mediaStream)
+      // Pass existing stream — useMediaPipe reuses it for frame capture
+      await mediapipe.start(mediaStream)
       setStream(null)
       setStage('face-check')
     },
-    [webgazer]
+    [mediapipe]
   )
 
   const handleFaceDetected = useCallback((detected: boolean) => {
@@ -40,10 +38,6 @@ export function CalibrationApp() {
   }, [])
 
   const handleFaceCheckNext = useCallback(() => {
-    setStage('library-check')
-  }, [])
-
-  const handleLibraryCheckNext = useCallback(() => {
     setStage('calibration')
   }, [])
 
@@ -53,27 +47,28 @@ export function CalibrationApp() {
 
   const handleRecordSample = useCallback(
     (x: number, y: number) => {
-      webgazer.recordScreenPosition(x, y)
+      mediapipe.recordScreenPosition(x, y)
     },
-    [webgazer]
+    [mediapipe]
   )
 
   // Ref keeps exportModel accessible without making the callback unstable
-  const exportModelRef = useRef(webgazer.exportModel)
-  exportModelRef.current = webgazer.exportModel
+  const exportModelRef = useRef(mediapipe.exportModel)
+  exportModelRef.current = mediapipe.exportModel
 
-  const handleValidationComplete = useCallback(async (error: number) => {
-    setAvgErrorPx(error)
-    // Export the trained regression model and save to storage
-    // so the offscreen gaze engine can reuse it during tracking
-    try {
-      const modelData = await exportModelRef.current()
-      if (modelData) {
-        await chrome.storage.local.set({ 'gazekit:model': modelData })
-        console.log('[GazeKit] Calibration model saved to storage')
-      }
-    } catch (err) {
-      console.warn('[GazeKit] Failed to export calibration model:', err)
+  const handleValidationComplete = useCallback(async (avgError: number) => {
+    setAvgErrorPx(avgError)
+    const modelData = await exportModelRef.current()
+    if (modelData) {
+      await chrome.storage.local.set({
+        'gazekit:model': {
+          coeffsX: modelData.coeffsX,
+          coeffsY: modelData.coeffsY,
+          calibratedAt: new Date().toISOString(),
+          screenWidth: window.screen.width,
+          screenHeight: window.screen.height,
+        },
+      })
     }
     setStage('results')
   }, [])
@@ -87,19 +82,18 @@ export function CalibrationApp() {
   }, [])
 
   const handleSelectTab = useCallback(async (tabId: number) => {
-    await webgazer.stop()
+    await mediapipe.stop()
     if (stream) {
       stream.getTracks().forEach((track) => track.stop())
       setStream(null)
     }
     chrome.runtime.sendMessage({ type: 'start_session', targetTabId: tabId })
     window.close()
-  }, [webgazer, stream])
+  }, [mediapipe, stream])
 
   const stepIndicators: Array<{ key: CalibrationStage; label: string }> = [
     { key: 'camera', label: 'Camera' },
     { key: 'face-check', label: 'Face Check' },
-    { key: 'library-check', label: 'Eye Track' },
     { key: 'calibration', label: 'Calibrate' },
     { key: 'validation', label: 'Validate' },
     { key: 'results', label: 'Results' },
@@ -109,7 +103,6 @@ export function CalibrationApp() {
   const stageOrder: CalibrationStage[] = [
     'camera',
     'face-check',
-    'library-check',
     'calibration',
     'validation',
     'results',
@@ -117,26 +110,15 @@ export function CalibrationApp() {
   ]
   const currentStageIndex = stageOrder.indexOf(stage)
 
-  // Set iframe preview mode based on stage
-  useEffect(() => {
-    if (stage === 'library-check') {
-      webgazer.setPreviewMode('large')
-    } else if (stage === 'calibration' || stage === 'validation' || stage === 'tab-picker') {
-      webgazer.setPreviewMode('hidden')
-    } else {
-      webgazer.setPreviewMode('pip')
-    }
-  }, [stage, webgazer])
-
   const showChrome = stage !== 'calibration' && stage !== 'validation' && stage !== 'tab-picker'
 
   return (
     <div className="flex h-screen w-screen flex-col bg-gray-50">
-      {/* WebGazer error banner */}
-      {webgazer.error && (
+      {/* Eye tracking error banner */}
+      {mediapipe.error && (
         <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-center">
-          <p className="text-sm font-medium text-red-700">WebGazer Error</p>
-          <p className="mt-1 text-xs text-red-600">{webgazer.error}</p>
+          <p className="text-sm font-medium text-red-700">Eye Tracking Error</p>
+          <p className="mt-1 text-xs text-red-600">{mediapipe.error}</p>
         </div>
       )}
 
@@ -192,27 +174,16 @@ export function CalibrationApp() {
           <CameraStep onNext={handleCameraNext} onFaceDetected={handleFaceDetected} />
         )}
         {stage === 'face-check' && (
-          <FaceCheckStep faceDetected={webgazer.faceDetected || faceDetectedRef.current} onNext={handleFaceCheckNext} />
-        )}
-        {stage === 'library-check' && (
-          <LibraryCheckStep
-            isReady={webgazer.isReady}
-            faceDetected={webgazer.faceDetected}
-            prediction={webgazer.prediction}
-            listenerCount={webgazer.listenerCount}
-            error={webgazer.error}
-            onNext={handleLibraryCheckNext}
-          />
+          <FaceCheckStep faceDetected={mediapipe.faceDetected || faceDetectedRef.current} onNext={handleFaceCheckNext} />
         )}
         {stage === 'calibration' && (
-          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} prediction={webgazer.prediction} />
+          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} prediction={mediapipe.prediction} />
         )}
         {stage === 'validation' && (
           <ValidationStep
-            getPrediction={webgazer.getPrediction}
-            prediction={webgazer.prediction}
-            faceDetected={webgazer.faceDetected}
-            listenerCount={webgazer.listenerCount}
+            getPrediction={mediapipe.getPrediction}
+            prediction={mediapipe.prediction}
+            faceDetected={mediapipe.faceDetected}
             onComplete={handleValidationComplete}
           />
         )}
@@ -229,22 +200,22 @@ export function CalibrationApp() {
       </div>
 
       {stream && stage !== 'calibration' && stage !== 'validation' && (
-        <VideoPreview stream={stream} faceDetected={webgazer.faceDetected || faceDetectedRef.current} />
+        <VideoPreview stream={stream} faceDetected={mediapipe.faceDetected || faceDetectedRef.current} />
       )}
 
       {/* Compact status bar — bottom-left */}
-      {webgazer.isReady !== undefined && stage !== 'camera' && (
+      {mediapipe.isReady !== undefined && stage !== 'camera' && (
         <div className="pointer-events-none fixed bottom-4 left-4 z-[100000] flex items-center gap-3 rounded-lg border border-gray-200 bg-white/90 px-3 py-2 font-mono text-xs shadow-sm backdrop-blur">
-          <span className={`h-2 w-2 rounded-full ${webgazer.isReady ? 'bg-green-500' : webgazer.error ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} />
+          <span className={`h-2 w-2 rounded-full ${mediapipe.isReady ? 'bg-green-500' : mediapipe.error ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`} />
           <span className="text-gray-600">
-            {webgazer.error
-              ? `Error: ${webgazer.error}`
-              : !webgazer.isReady
-                ? 'Loading WebGazer...'
-                : webgazer.prediction
-                  ? `Eyes: (${webgazer.prediction.x.toFixed(0)}, ${webgazer.prediction.y.toFixed(0)}) | ${webgazer.listenerCount} samples`
-                  : webgazer.faceDetected
-                    ? `Face detected | ${webgazer.listenerCount} samples`
+            {mediapipe.error
+              ? `Error: ${mediapipe.error}`
+              : !mediapipe.isReady
+                ? 'Loading eye tracker...'
+                : mediapipe.prediction
+                  ? `Eyes: (${mediapipe.prediction.x.toFixed(0)}, ${mediapipe.prediction.y.toFixed(0)})`
+                  : mediapipe.faceDetected
+                    ? 'Face detected'
                     : 'Face not detected'}
           </span>
         </div>

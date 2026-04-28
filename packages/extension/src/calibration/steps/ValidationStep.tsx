@@ -1,30 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { VALIDATION_POINTS } from '@gazekit/shared'
 import { ProgressBar } from '../components/ProgressBar'
 
 interface ValidationStepProps {
-  getPrediction: () => Promise<{ x: number; y: number } | null>
+  getPrediction: () => { x: number; y: number } | null
   prediction: { x: number; y: number } | null
   faceDetected: boolean
-  listenerCount: number
   onComplete: (avgErrorPx: number) => void
 }
-
-const VALIDATION_POINTS = [
-  { x: 0.2, y: 0.2 },
-  { x: 0.5, y: 0.15 },
-  { x: 0.8, y: 0.25 },
-  { x: 0.15, y: 0.5 },
-  { x: 0.5, y: 0.5 },
-  { x: 0.85, y: 0.5 },
-  { x: 0.25, y: 0.75 },
-  { x: 0.5, y: 0.85 },
-  { x: 0.75, y: 0.8 },
-]
 
 const DISPLAY_DURATION_MS = 4000
 const SAMPLE_INTERVAL_MS = 50
 
-export function ValidationStep({ getPrediction, prediction, faceDetected, listenerCount, onComplete }: ValidationStepProps) {
+export function ValidationStep({ getPrediction, prediction, faceDetected, onComplete }: ValidationStepProps) {
   const [currentPointIndex, setCurrentPointIndex] = useState(0)
   const [errors, setErrors] = useState<number[]>([])
   const [collecting, setCollecting] = useState(true)
@@ -60,9 +48,9 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, listen
     setLiveError(Math.sqrt(dx * dx + dy * dy))
   }, [prediction, currentPoint])
 
-  const collectSamples = useCallback(async () => {
+  const collectSamples = useCallback(() => {
     if (!currentPoint) return
-    const pred = await getPrediction()
+    const pred = getPrediction()
     if (pred) {
       const actualX = currentPoint.x * window.innerWidth
       const actualY = currentPoint.y * window.innerHeight
@@ -187,11 +175,6 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, listen
         <div className="mb-2 flex items-center gap-2 text-gray-600">
           <div className={`h-2 w-2 rounded-full ${faceDetected ? 'bg-green-500' : 'bg-red-500'}`} />
           <span>Face: {faceDetected ? 'Detected' : 'Not detected'}</span>
-        </div>
-
-        <div className="mb-2 flex items-center gap-2 text-gray-600">
-          <div className={`h-2 w-2 rounded-full ${listenerCount > 0 ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
-          <span>Gaze listener: {listenerCount > 0 ? `${listenerCount} ticks` : 'waiting...'}</span>
         </div>
 
         <div className="mb-1 text-gray-400">--- Point {currentPointIndex + 1}/{totalPoints} ---</div>

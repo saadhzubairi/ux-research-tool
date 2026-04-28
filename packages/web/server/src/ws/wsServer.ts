@@ -194,6 +194,10 @@ async function handlePageScreenshot(
   payload: Extract<ExtensionMessage, { type: 'page_screenshot' }>['payload']
 ): Promise<void> {
   const { sessionId, url } = payload
+  if (!sessionId || !url) {
+    console.warn('[GazeKit WS] Skipping screenshot: missing sessionId or url')
+    return
+  }
 
   // Visit detection: find the most recent screenshot for this session (any URL)
   const mostRecent = await Screenshot.findOne({ sessionId })

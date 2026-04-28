@@ -80,9 +80,8 @@ async function ensureOffscreenDocument(): Promise<void> {
     reasons: [
       chrome.offscreen.Reason.WORKERS,
       chrome.offscreen.Reason.USER_MEDIA,
-      chrome.offscreen.Reason.IFRAME_SCRIPTING,
     ],
-    justification: 'WebSocket connection, webcam gaze tracking, and sandboxed WebGazer',
+    justification: 'WebSocket connection and webcam gaze tracking',
   })
 
   // The offscreen module script loads asynchronously after createDocument
@@ -311,7 +310,7 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
               calibratedAt: cal.calibratedAt,
             }
           : {
-              method: '9-point',
+              method: '6-point-polynomial',
               avgErrorPx: 0,
               precisionPx: 0,
               qualityScore: 0,
@@ -321,9 +320,9 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
               calibratedAt: new Date().toISOString(),
             },
         tracking: {
-          library: 'webgazer',
+          library: 'mediapipe',
           version: '',
-          regressionModel: 'ridge',
+          regressionModel: 'polynomial',
           avgFps: 0,
         },
         pages: [
@@ -575,11 +574,6 @@ async function handleMessage(message: InboundMessage): Promise<unknown> {
         console.warn('[GazeKit SW] gaze_samples dropped: activeTabId=', state.activeTabId, 'isTracking=', state.isTracking)
       }
       return { forwarded: true }
-    }
-
-    case 'get_calibration_model': {
-      const stored = await chrome.storage.local.get('gazekit:model')
-      return { model: stored['gazekit:model'] ?? null }
     }
 
     case 'server_command': {

@@ -34,6 +34,7 @@ export function FaceCheckStep({ faceDetected, onNext }: FaceCheckStepProps) {
       holdStartRef.current = null
       setCountdown(2)
     }
+    return undefined
   }, [faceDetected, ready])
 
   useEffect(() => {

@@ -35,26 +35,3 @@ declare module 'heatmap.js' {
   const h337: HeatmapFactory
   export default h337
 }
-
-declare module 'rrweb-player' {
-  interface RRWebPlayerOptions {
-    target: HTMLElement
-    props: {
-      events: unknown[]
-      width?: number
-      height?: number
-      autoPlay?: boolean
-      showController?: boolean
-      speed?: number
-    }
-  }
-
-  class RRWebPlayer {
-    constructor(options: RRWebPlayerOptions)
-    play(): void
-    pause(): void
-    goto(timeOffset: number): void
-  }
-
-  export default RRWebPlayer
-}

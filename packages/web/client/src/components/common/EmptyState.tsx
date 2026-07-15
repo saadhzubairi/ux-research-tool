@@ -10,18 +10,38 @@ interface EmptyStateProps {
   }
 }
 
+function SmileyCloud() {
+  return (
+    <svg viewBox="0 0 120 80" className="w-28 h-20" fill="none">
+      <path
+        d="M30 62c-11 0-20-8-20-18s8-17 17-18c3-10 12-17 23-17 10 0 19 6 22 15 2-1 4-1 6-1 12 0 22 9 22 20s-10 19-22 19H30z"
+        fill="#fff"
+        stroke="#dfe5f9"
+        strokeWidth="3"
+      />
+      <circle cx="52" cy="44" r="3.2" fill="#2e3560" />
+      <circle cx="72" cy="44" r="3.2" fill="#2e3560" />
+      <path d="M56 53c2.5 2.5 9.5 2.5 12 0" stroke="#2e3560" strokeWidth="2.5" strokeLinecap="round" />
+      <circle cx="44" cy="51" r="3.5" fill="#f6c4cf" />
+      <circle cx="80" cy="51" r="3.5" fill="#f6c4cf" />
+    </svg>
+  )
+}
+
 export default function EmptyState({ icon, title, description, action }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
-      <div className="w-16 h-16 bg-surface-800 flex items-center justify-center mb-4 text-surface-500">
-        {icon ?? (
-          <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25 2.25M12 13.875l2.25-2.25M12 13.875l-2.25 2.25M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
-          </svg>
+      <div className="mb-4 animate-bob">
+        {icon ? (
+          <div className="w-20 h-20 rounded-full bg-accent-100 flex items-center justify-center text-accent-500">
+            {icon}
+          </div>
+        ) : (
+          <SmileyCloud />
         )}
       </div>
-      <h3 className="text-lg font-semibold text-surface-200 mb-1">{title}</h3>
-      <p className="text-sm text-surface-400 max-w-sm mb-4">{description}</p>
+      <h3 className="text-lg font-bold text-surface-100 mb-1">{title}</h3>
+      <p className="text-sm font-semibold text-surface-400 max-w-sm mb-4">{description}</p>
       {action && (
         <button onClick={action.onClick} className="btn-primary">
           {action.label}

@@ -17,7 +17,8 @@ const SessionSchema = new Schema({
     resolution: { w: Number, h: Number },
   },
   calibration: {
-    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell', '6-point-polynomial'] },
+    // Keep in sync with CalibrationResult['method'] in @gazekit/shared
+    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell', '6-point-polynomial', '13-point-ridge'] },
     avgErrorPx: Number,
     precisionPx: Number,
     qualityScore: Number,
@@ -25,6 +26,13 @@ const SessionSchema = new Schema({
     screenHeight: Number,
     dpr: Number,
     calibratedAt: Date,
+    // Physical-screen context (null when the user skipped the screen-size
+    // input). pxPerDeg drives visual-degree thresholds, e.g. fixation
+    // dispersion in fixationService.
+    screenDiagonalMm: Number,
+    viewingDistanceMm: Number,
+    pxPerDeg: Number,
+    avgErrorDeg: Number,
   },
   tracking: {
     library: String,
@@ -32,15 +40,19 @@ const SessionSchema = new Schema({
     regressionModel: String,
     avgFps: Number,
   },
-  pages: [{
-    url: String,
-    enteredAt: Date,
-    leftAt: Date,
-  }],
+  // Page/Slice rework: pages are now first-class `Page` documents keyed by
+  // sessionId, not an embedded array. schemaVersion gates the read path —
+  // v1 sessions still carry legacy Screenshot/GazeEvent docs (and, in old
+  // rows, an embedded pages[]); v2 sessions use Page/Slice. Old v1 data ages
+  // out via the 90-day slice TTL, so no backfill is written.
+  schemaVersion: { type: Number, default: 1 },
   stats: {
     totalGazePoints: { type: Number, default: 0 },
     trackingLossSeconds: { type: Number, default: 0 },
     avgConfidence: { type: Number, default: 0 },
+    // Running accumulators so avgConfidence is a true session-wide mean
+    confSum: { type: Number, default: 0 },
+    confCount: { type: Number, default: 0 },
   },
   status: { type: String, enum: ['active', 'completed', 'error'], default: 'active' },
 }, { timestamps: true })

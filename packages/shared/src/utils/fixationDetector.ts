@@ -1,9 +1,15 @@
 import type { GazeSample, Fixation } from '../types/gaze'
-import { FIXATION_DISPERSION_THRESHOLD_PX, FIXATION_DURATION_THRESHOLD_MS } from '../constants'
+import {
+  FIXATION_DISPERSION_THRESHOLD_PX,
+  FIXATION_DURATION_THRESHOLD_MS,
+  FIXATION_MAX_GAP_MS,
+} from '../constants'
 
 interface FixationOptions {
   dispersionThreshold?: number
   durationThreshold?: number
+  /** Max ts gap between consecutive samples inside one fixation */
+  maxGapMs?: number
 }
 
 export function detectFixations(
@@ -12,6 +18,7 @@ export function detectFixations(
 ): Fixation[] {
   const dispersionThreshold = options?.dispersionThreshold ?? FIXATION_DISPERSION_THRESHOLD_PX
   const durationThreshold = options?.durationThreshold ?? FIXATION_DURATION_THRESHOLD_MS
+  const maxGapMs = options?.maxGapMs ?? FIXATION_MAX_GAP_MS
 
   if (samples.length < 2) return []
 
@@ -22,24 +29,44 @@ export function detectFixations(
   while (windowStart < samples.length) {
     windowEnd = windowStart + 1
 
-    // Expand window until duration threshold is met
+    // Expand window until duration threshold is met — but never across a
+    // sample gap (tracking loss, blink, tab switch): a "fixation" bridging
+    // a gap spans unrelated moments and its inflated duration washes out
+    // heatmap normalization
+    let gapHit = false
     while (
       windowEnd < samples.length &&
       samples[windowEnd]!.ts - samples[windowStart]!.ts < durationThreshold
     ) {
+      if (samples[windowEnd]!.ts - samples[windowEnd - 1]!.ts > maxGapMs) {
+        gapHit = true
+        break
+      }
       windowEnd++
     }
 
+    if (gapHit) {
+      windowStart = windowEnd
+      continue
+    }
+
     if (windowEnd >= samples.length) break
+
+    if (samples[windowEnd]!.ts - samples[windowEnd - 1]!.ts > maxGapMs) {
+      windowStart = windowEnd
+      continue
+    }
 
     // Check dispersion of current window
     const window = samples.slice(windowStart, windowEnd + 1)
     let dispersion = computeDispersion(window)
 
     if (dispersion <= dispersionThreshold) {
-      // Expand window while dispersion stays below threshold
+      // Expand window while dispersion stays below threshold and samples
+      // remain temporally contiguous
       while (windowEnd + 1 < samples.length) {
         const nextSample = samples[windowEnd + 1]!
+        if (nextSample.ts - samples[windowEnd]!.ts > maxGapMs) break
         const extendedWindow = [...window, nextSample]
         const newDispersion = computeDispersion(extendedWindow)
         if (newDispersion > dispersionThreshold) break

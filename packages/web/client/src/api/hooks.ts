@@ -2,13 +2,29 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type {
   SessionMeta,
   HeatmapData,
-  ReplayData,
   ElementAttention,
   ApiResponse,
   SessionsQuery,
-  ScreenshotInfo,
+  Page,
+  SliceListItem,
 } from '@gazekit/shared'
 import api from './client'
+
+/** Canonical query key for a page's slice list. The live WS hook appends into
+ *  the base-range ([null, null]) entry, so the live view MUST use
+ *  useSlicesQuery(sessionId, pageId) with no from/to to share that cache. */
+export function slicesQueryKey(
+  sessionId: string,
+  pageId: string,
+  from?: string,
+  to?: string,
+) {
+  return ['slices', sessionId, pageId, from ?? null, to ?? null] as const
+}
+
+export function pagesQueryKey(sessionId: string) {
+  return ['pages', sessionId] as const
+}
 
 interface SessionsResponse {
   sessions: SessionMeta[]
@@ -39,19 +55,6 @@ export function useSessionQuery(id: string) {
   })
 }
 
-export function useHeatmapQuery(sessionId: string, url?: string) {
-  return useQuery({
-    queryKey: ['heatmap', sessionId, url],
-    queryFn: () =>
-      api
-        .get<ApiResponse<HeatmapData>>(`/api/heatmap/${sessionId}`, {
-          params: { url },
-        })
-        .then((r) => r.data),
-    enabled: !!sessionId && !!url,
-  })
-}
-
 export function useAggregateHeatmapQuery(
   url: string,
   from?: string,
@@ -69,45 +72,42 @@ export function useAggregateHeatmapQuery(
   })
 }
 
-export function useTimelineHeatmapQuery(
+/** GET /api/sessions/:id/pages → Page[] (real page instances; repeat visits to
+ *  the same URL are distinct entries). Replaces deriving tabs from
+ *  SessionMeta.pages string URLs. */
+export function usePagesQuery(sessionId: string) {
+  return useQuery({
+    queryKey: pagesQueryKey(sessionId),
+    queryFn: () =>
+      api
+        .get<ApiResponse<Page[]>>(`/api/sessions/${sessionId}/pages`)
+        .then((r) => r.data),
+    enabled: !!sessionId,
+  })
+}
+
+/** GET /api/sessions/:id/pages/:pageId/slices → ApiResponse<SliceListItem[]>
+ *  ordered by sliceIndex (total row count is in the X-Total-Count header, which
+ *  the client doesn't need — it scrubs the fetched list in memory). Each slice
+ *  bundles a viewport screenshot and the fixations captured in its window (raw
+ *  gazePoints omitted from the list shape), so scrubbing needs no separate
+ *  screenshot/gaze join. The live WS hook appends into this same cache.
+ *  `from`/`to` are integer sliceIndex cutoffs (inclusive) when supplied. */
+export function useSlicesQuery(
   sessionId: string,
-  url?: string,
-  toTs?: number,
+  pageId: string | undefined,
+  range?: { from?: string; to?: string },
 ) {
   return useQuery({
-    queryKey: ['heatmap', sessionId, url, 'timeline', toTs],
+    queryKey: slicesQueryKey(sessionId, pageId ?? '', range?.from, range?.to),
     queryFn: () =>
       api
-        .get<ApiResponse<HeatmapData>>(`/api/heatmap/${sessionId}`, {
-          params: { url, to: toTs },
-        })
-        .then((r) => r.data),
-    enabled: !!sessionId && !!url && toTs !== undefined,
-  })
-}
-
-export function useSessionScreenshots(sessionId: string, url?: string) {
-  return useQuery({
-    queryKey: ['screenshots', sessionId, url],
-    queryFn: () =>
-      api
-        .get<ApiResponse<ScreenshotInfo[]>>(
-          `/api/sessions/${sessionId}/screenshots`,
-          { params: url ? { url } : undefined },
+        .get<ApiResponse<SliceListItem[]>>(
+          `/api/sessions/${sessionId}/pages/${pageId}/slices`,
+          { params: { from: range?.from, to: range?.to } },
         )
         .then((r) => r.data),
-    enabled: !!sessionId,
-  })
-}
-
-export function useReplayQuery(sessionId: string) {
-  return useQuery({
-    queryKey: ['replay', sessionId],
-    queryFn: () =>
-      api
-        .get<ApiResponse<ReplayData>>(`/api/sessions/${sessionId}/replay`)
-        .then((r) => r.data),
-    enabled: !!sessionId,
+    enabled: !!sessionId && !!pageId,
   })
 }
 

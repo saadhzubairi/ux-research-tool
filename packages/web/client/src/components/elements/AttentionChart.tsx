@@ -17,9 +17,9 @@ interface AttentionChartProps {
 }
 
 const BAR_COLORS = [
-  '#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe',
-  '#e0e7ff', '#4f46e5', '#4338ca', '#3730a3',
-  '#312e81', '#eef2ff',
+  '#4a63c8', '#e87a90', '#7288d9', '#f2a9b8',
+  '#9dade8', '#ed8ca0', '#c3cdf2', '#f6c4cf',
+  '#5570cf', '#d55f78',
 ]
 
 interface ChartTooltipProps {
@@ -41,7 +41,7 @@ function ChartTooltip({ active, payload }: ChartTooltipProps) {
   const data = payload[0].payload
 
   return (
-    <div className="bg-surface-800 border border-surface-600 rounded-md shadow-lg p-3 text-xs">
+    <div className="bg-surface-900 border-2 border-accent-100 rounded-2xl shadow-sticker p-3 text-xs">
       <p className="font-mono text-surface-200 mb-1">{data.selector}</p>
       <p className="text-surface-400">
         &lt;{data.tag}&gt;
@@ -97,34 +97,34 @@ export default function AttentionChart({ elements }: AttentionChartProps) {
           >
             <CartesianGrid
               strokeDasharray="3 3"
-              stroke="#2a2a2a"
+              stroke="#e8e9f6"
               horizontal={false}
             />
             <XAxis
               type="number"
-              tick={{ fill: '#737373', fontSize: 11 }}
-              axisLine={{ stroke: '#3a3a3a' }}
-              tickLine={{ stroke: '#3a3a3a' }}
+              tick={{ fill: '#6a7195', fontSize: 11 }}
+              axisLine={{ stroke: '#dcdff0' }}
+              tickLine={{ stroke: '#dcdff0' }}
               label={{
                 value: 'Dwell Time (s)',
                 position: 'insideBottom',
                 offset: -2,
-                style: { fill: '#525252', fontSize: 11 },
+                style: { fill: '#9297b8', fontSize: 11 },
               }}
             />
             <YAxis
               dataKey="label"
               type="category"
               width={180}
-              tick={{ fill: '#a3a3a3', fontSize: 10, fontFamily: 'monospace' }}
-              axisLine={{ stroke: '#3a3a3a' }}
+              tick={{ fill: '#5b638f', fontSize: 10, fontFamily: 'monospace' }}
+              axisLine={{ stroke: '#dcdff0' }}
               tickLine={false}
             />
             <Tooltip
               content={<ChartTooltip />}
-              cursor={{ fill: 'rgba(99, 102, 241, 0.1)' }}
+              cursor={{ fill: 'rgba(74, 99, 200, 0.08)' }}
             />
-            <Bar dataKey="dwellSec" radius={0} barSize={20}>
+            <Bar dataKey="dwellSec" radius={[0, 8, 8, 0]} barSize={20}>
               {chartData.map((_, index) => (
                 <Cell
                   key={`cell-${index}`}

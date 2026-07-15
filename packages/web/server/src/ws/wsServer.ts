@@ -1,14 +1,31 @@
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ExtensionMessage, ServerMessage } from '@gazekit/shared'
+import type {
+  ExtensionMessage,
+  DashboardMessage,
+  ServerMessage,
+  DashboardPushMessage,
+  SlicePayload,
+  SliceListItem,
+  SliceFixation,
+  GazePoint,
+} from '@gazekit/shared'
+import { normalizeGazeUrl } from '@gazekit/shared'
 import { Session } from '../models/Session'
-import { GazeEvent } from '../models/GazeEvent'
-import { RrwebEvent } from '../models/RrwebEvent'
-import { Screenshot } from '../models/Screenshot'
-import { config } from '../config/env'
-import fs from 'fs/promises'
-import path from 'path'
+import { Page } from '../models/Page'
+import { Slice } from '../models/Slice'
+import { computeSliceFixations } from '../services/fixationService'
+import type { StoredFixation } from '../services/fixationService'
+import { writeSliceScreenshot, sliceScreenshotUrl } from '../services/screenshotStore'
 
+// Extension ingestion connections, keyed by sessionId (one live session each).
 const connections = new Map<string, WebSocket>()
+// Dashboard live-heatmap subscribers, keyed by sessionId.
+const subscribers = new Map<string, Set<WebSocket>>()
+// In-memory active Page per session — avoids a DB lookup on every slice.
+// Rebuilt from the DB on a cache miss (e.g. after a server restart mid-session).
+const activePages = new Map<string, { pageId: string; url: string; pageIndex: number }>()
+// Cached pxPerDeg per session for the ingest-time fixation dispersion gate.
+const sessionPxPerDeg = new Map<string, number | null>()
 
 export function getActiveConnectionCount(): number {
   return connections.size
@@ -19,10 +36,12 @@ export function createWsServer(port: number): WebSocketServer {
 
   wss.on('connection', (ws) => {
     let sessionId: string | null = null
+    // Sessions this socket is a dashboard subscriber for (cleanup on close).
+    const subscribedTo = new Set<string>()
 
     ws.on('message', async (data) => {
       try {
-        const message = JSON.parse(data.toString()) as ExtensionMessage
+        const message = JSON.parse(data.toString()) as ExtensionMessage | DashboardMessage
 
         switch (message.type) {
           case 'session_start':
@@ -32,20 +51,9 @@ export function createWsServer(port: number): WebSocketServer {
             sendAck(ws, 'session_start')
             break
 
-          case 'gaze_batch':
-            console.log(`[GazeKit WS] Received gaze_batch: ${message.payload.events.length} events, session=${message.payload.sessionId}, batch=#${message.payload.batchIndex}`)
-            await handleGazeBatch(message.payload)
-            sendAck(ws, 'gaze_batch', message.payload.events.length)
-            break
-
-          case 'rrweb_events':
-            await handleRrwebEvents(message.payload)
-            sendAck(ws, 'rrweb_events')
-            break
-
-          case 'page_screenshot':
-            await handlePageScreenshot(message.payload)
-            sendAck(ws, 'page_screenshot')
+          case 'slice':
+            await handleSlice(message.payload)
+            sendAck(ws, 'slice', message.payload.gazePoints.length)
             break
 
           case 'calibration_update':
@@ -56,12 +64,24 @@ export function createWsServer(port: number): WebSocketServer {
           case 'session_end':
             await handleSessionEnd(message.payload)
             connections.delete(message.payload.sessionId)
+            activePages.delete(message.payload.sessionId)
+            sessionPxPerDeg.delete(message.payload.sessionId)
             sendAck(ws, 'session_end')
             break
 
           case 'heartbeat':
             await handleHeartbeat(message.payload)
             sendAck(ws, 'heartbeat')
+            break
+
+          case 'subscribe':
+            subscribeDashboard(message.payload.sessionId, ws)
+            subscribedTo.add(message.payload.sessionId)
+            break
+
+          case 'unsubscribe':
+            unsubscribeDashboard(message.payload.sessionId, ws)
+            subscribedTo.delete(message.payload.sessionId)
             break
         }
       } catch (err) {
@@ -71,16 +91,14 @@ export function createWsServer(port: number): WebSocketServer {
     })
 
     ws.on('close', () => {
-      if (sessionId) {
-        connections.delete(sessionId)
-      }
+      if (sessionId) connections.delete(sessionId)
+      for (const sid of subscribedTo) unsubscribeDashboard(sid, ws)
     })
 
     ws.on('error', (err) => {
       console.error('WebSocket error:', err.message)
-      if (sessionId) {
-        connections.delete(sessionId)
-      }
+      if (sessionId) connections.delete(sessionId)
+      for (const sid of subscribedTo) unsubscribeDashboard(sid, ws)
     })
   })
 
@@ -105,11 +123,8 @@ async function handleSessionStart(
         }
       : undefined,
     tracking: payload.tracking,
-    pages: payload.pages?.map(p => ({
-      url: p.url,
-      enteredAt: new Date(p.enteredAt),
-      leftAt: p.leftAt ? new Date(p.leftAt) : undefined,
-    })),
+    // New sessions use the Page/Slice model.
+    schemaVersion: 2,
     stats: {
       totalGazePoints: 0,
       trackingLossSeconds: 0,
@@ -117,153 +132,241 @@ async function handleSessionStart(
     },
     status: 'active',
   })
-}
 
-async function handleGazeBatch(
-  payload: Extract<ExtensionMessage, { type: 'gaze_batch' }>['payload']
-): Promise<void> {
-  const docs = payload.events.map(event => ({
-    ts: new Date(event.sample.ts),
-    x: event.sample.x,
-    y: event.sample.y,
-    conf: event.sample.conf,
-    el: event.element
-      ? {
-          sel: event.element.selector,
-          tag: event.element.tag,
-          txt: event.element.text,
-          rect: event.element.rect,
-        }
-      : undefined,
-    ctx: {
-      url: event.context.url,
-      sx: event.context.scrollX,
-      sy: event.context.scrollY,
-      vw: event.context.viewportWidth,
-      vh: event.context.viewportHeight,
-      dw: event.context.docWidth,
-      dh: event.context.docHeight,
-      dv: event.context.domVersion,
-      dpr: event.context.dpr,
-    },
-    meta: {
-      sid: payload.sessionId,
-      bi: payload.batchIndex,
-    },
-  }))
-
-  await GazeEvent.insertMany(docs, { ordered: false })
-
-  const confValues = payload.events
-    .map(e => e.sample.conf)
-    .filter((c): c is number => c !== null)
-  const batchAvgConf = confValues.length > 0
-    ? confValues.reduce((sum, c) => sum + c, 0) / confValues.length
-    : 0
-
-  await Session.updateOne(
-    { sessionId: payload.sessionId },
-    {
-      $inc: { 'stats.totalGazePoints': payload.events.length },
-      $set: { 'stats.avgConfidence': batchAvgConf },
-    }
+  const pxPerDeg = payload.calibration?.pxPerDeg
+  sessionPxPerDeg.set(
+    payload.sessionId,
+    typeof pxPerDeg === 'number' ? pxPerDeg : null
   )
 }
 
-async function handleRrwebEvents(
-  payload: Extract<ExtensionMessage, { type: 'rrweb_events' }>['payload']
-): Promise<void> {
-  await RrwebEvent.create({
-    sessionId: payload.sessionId,
-    events: payload.events,
-    receivedAt: new Date(),
+/**
+ * Ingest one capture tick. Collapses the old gaze_batch + page_screenshot +
+ * visit-detection handlers: page boundaries are now explicit (navigation
+ * trigger, or a URL mismatch as an SPA-transition safety net), fixations are
+ * computed here, and completed slices fan out to dashboard subscribers.
+ */
+async function handleSlice(payload: SlicePayload): Promise<void> {
+  const { sessionId, trigger, capturedAt, gazePoints } = payload
+  const url = normalizeGazeUrl(payload.url)
+  const capturedDate = new Date(capturedAt)
+
+  // 1. Resolve the current Page for this session.
+  const page = await resolveActivePage(sessionId, url, trigger, capturedDate, {
+    width: payload.viewportWidth,
+    height: payload.viewportHeight,
+    dpr: 1,
   })
-}
 
-function sanitizeUrlForFilename(url: string): string {
-  try {
-    const parsed = new URL(url)
-    const raw = parsed.hostname + parsed.pathname
-    return raw.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80)
-  } catch {
-    return url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80)
-  }
-}
+  // 2. Reserve this slice's index atomically (single writer per session).
+  const bumped = await Page.findByIdAndUpdate(
+    page.pageId,
+    { $inc: { sliceCount: 1 } },
+    { new: true, projection: { sliceCount: 1 } }
+  )
+  const sliceIndex = (bumped?.sliceCount ?? 1) - 1
 
-async function handlePageScreenshot(
-  payload: Extract<ExtensionMessage, { type: 'page_screenshot' }>['payload']
-): Promise<void> {
-  const { sessionId, url } = payload
-  if (!sessionId || !url) {
-    console.warn('[GazeKit WS] Skipping screenshot: missing sessionId or url')
-    return
-  }
-
-  // Visit detection: find the most recent screenshot for this session (any URL)
-  const mostRecent = await Screenshot.findOne({ sessionId })
-    .sort({ capturedAt: -1 })
-    .lean()
-
-  let visitIndex: number
-  let index: number
-
-  if (!mostRecent) {
-    // First screenshot in this session
-    visitIndex = 1
-    index = 0
-  } else if (mostRecent.url === url) {
-    // Same URL as last screenshot — continue the current visit
-    visitIndex = mostRecent.visitIndex ?? 1
-    index = (mostRecent.index ?? 0) + 1
-  } else {
-    // Different URL — new visit for this URL
-    const existingVisitCount = await Screenshot.distinct('visitIndex', { sessionId, url })
-    visitIndex = existingVisitCount.length + 1
-    index = 0
-  }
-
-  const sanitizedUrl = sanitizeUrlForFilename(url)
-  const visitFolder = `${sanitizedUrl}-visit-${visitIndex}`
-  const screenshotDir = path.join(config.dataDir, 'screenshots', sessionId, visitFolder)
-  await fs.mkdir(screenshotDir, { recursive: true })
-
-  const filename = `${index}.png`
-  const filePath = path.join(screenshotDir, filename)
-
-  const base64Match = payload.dataUrl.match(/^data:image\/\w+;base64,(.+)$/)
-  if (!base64Match?.[1]) {
-    throw new Error('Invalid data URL format')
-  }
-
-  const buffer = Buffer.from(base64Match[1], 'base64')
-  await fs.writeFile(filePath, buffer)
-
-  const timestamp = Date.now()
-
-  await Screenshot.create({
+  // 3. Persist the screenshot to disk (scheme sessionId/pageId/sliceIndex.png).
+  const filePath = await writeSliceScreenshot(
     sessionId,
-    url,
-    scrollY: payload.scrollY,
-    viewportHeight: payload.viewportHeight,
-    filePath,
-    filename,
-    visitIndex,
-    visitFolder,
-    index,
-    capturedAt: new Date(timestamp),
+    page.pageId,
+    sliceIndex,
+    payload.screenshotDataUrl
+  )
+
+  // 4. Map wire gaze points to stored shape.
+  const storedGazePoints = gazePoints.map((gp: GazePoint) => ({
+    ts: new Date(gp.sample.ts),
+    x: gp.sample.x,
+    y: gp.sample.y,
+    conf: gp.sample.conf,
+    el: gp.element
+      ? {
+          sel: gp.element.selector,
+          tag: gp.element.tag,
+          txt: gp.element.text,
+          rect: gp.element.rect,
+        }
+      : null,
+  }))
+
+  // 5. Compute fixations at ingest (cheap: this slice's points + a trailing
+  //    window from the prior 1-2 slices). Written on the initial insert since
+  //    time-series collections don't support post-insert measurement updates.
+  const pxPerDeg = await resolvePxPerDeg(sessionId)
+  const fixations = await computeSliceFixations({
+    pageId: page.pageId,
+    sliceIndex,
+    gazePoints: storedGazePoints,
+    pxPerDeg,
   })
 
-  // When this is the first screenshot of a new visit (index === 0),
-  // push the URL into session.pages so URL tabs appear in the client
-  if (index === 0) {
+  // 6. Insert the slice.
+  const created = await Slice.create({
+    sessionId,
+    pageId: page.pageId,
+    sliceIndex,
+    capturedAt: capturedDate,
+    trigger,
+    screenshot: {
+      filePath,
+      scrollX: payload.scrollX,
+      scrollY: payload.scrollY,
+      viewportWidth: payload.viewportWidth,
+      viewportHeight: payload.viewportHeight,
+    },
+    gazePoints: storedGazePoints,
+    fixations,
+  })
+
+  // 7. Accumulate session stats (same weighted-mean scheme as the old path).
+  const confValues = gazePoints
+    .map((gp) => gp.sample.conf)
+    .filter((c): c is number => c !== null)
+  const confSum = confValues.reduce((sum, c) => sum + c, 0)
+  const session = await Session.findOneAndUpdate(
+    { sessionId },
+    {
+      $inc: {
+        'stats.totalGazePoints': gazePoints.length,
+        'stats.confSum': confSum,
+        'stats.confCount': confValues.length,
+      },
+    },
+    { new: true, projection: { stats: 1 } }
+  )
+  const stats = session?.stats
+  if (stats && stats.confCount > 0) {
     await Session.updateOne(
       { sessionId },
-      {
-        $push: {
-          pages: { url, enteredAt: new Date(timestamp) },
-        },
-      }
+      { $set: { 'stats.avgConfidence': stats.confSum / stats.confCount } }
     )
+  }
+
+  // 8. Fan out to dashboard subscribers.
+  const listItem: SliceListItem = {
+    _id: String(created._id),
+    sessionId,
+    pageId: page.pageId,
+    sliceIndex,
+    capturedAt: capturedDate.toISOString(),
+    trigger,
+    screenshot: {
+      url: sliceScreenshotUrl(sessionId, page.pageId, sliceIndex),
+      scrollX: payload.scrollX,
+      scrollY: payload.scrollY,
+      viewportWidth: payload.viewportWidth,
+      viewportHeight: payload.viewportHeight,
+    },
+    fixations: toWireFixations(fixations),
+  }
+  broadcast(sessionId, {
+    type: 'slice_ingested',
+    payload: { sessionId, pageId: page.pageId, slice: listItem },
+  })
+}
+
+/** Client-facing SliceFixation[] — drops the internal `el` enrichment. */
+function toWireFixations(fixations: StoredFixation[]): SliceFixation[] {
+  return fixations.map((f) => ({
+    x: f.x,
+    y: f.y,
+    startTs: f.startTs.toISOString(),
+    durationMs: f.durationMs,
+  }))
+}
+
+/**
+ * Resolve (and, when needed, roll over) the active Page for a session. A new
+ * Page opens on an explicit navigation trigger, when there's no active page,
+ * or when the URL no longer matches (safety net for missed SPA transitions).
+ */
+async function resolveActivePage(
+  sessionId: string,
+  url: string,
+  trigger: SlicePayload['trigger'],
+  capturedAt: Date,
+  viewport: { width: number; height: number; dpr: number }
+): Promise<{ pageId: string; url: string; pageIndex: number }> {
+  let active = activePages.get(sessionId)
+
+  // Cache miss (e.g. server restart mid-session): rebuild from the DB.
+  if (!active) {
+    const existing = await Page.findOne({ sessionId, status: 'active' })
+      .sort({ pageIndex: -1 })
+      .lean()
+    if (existing) {
+      active = {
+        pageId: String(existing._id),
+        url: existing.url ?? '',
+        pageIndex: existing.pageIndex ?? 0,
+      }
+      activePages.set(sessionId, active)
+    }
+  }
+
+  const needsNewPage = trigger === 'navigation' || !active || active.url !== url
+  if (!needsNewPage) return active!
+
+  // Close the prior active page.
+  if (active) {
+    await Page.updateOne(
+      { _id: active.pageId },
+      { $set: { leftAt: capturedAt, status: 'complete' } }
+    )
+  }
+
+  const prevCount = await Page.countDocuments({ sessionId })
+  const created = await Page.create({
+    sessionId,
+    pageIndex: prevCount,
+    url,
+    enteredAt: capturedAt,
+    leftAt: null,
+    sliceCount: 0,
+    viewport,
+    status: 'active',
+  })
+
+  const next = { pageId: String(created._id), url, pageIndex: prevCount }
+  activePages.set(sessionId, next)
+  return next
+}
+
+async function resolvePxPerDeg(sessionId: string): Promise<number | null> {
+  const cached = sessionPxPerDeg.get(sessionId)
+  if (cached !== undefined) return cached
+  const session = await Session.findOne({ sessionId })
+    .select({ 'calibration.pxPerDeg': 1 })
+    .lean()
+  const pxPerDeg = session?.calibration?.pxPerDeg
+  const value = typeof pxPerDeg === 'number' ? pxPerDeg : null
+  sessionPxPerDeg.set(sessionId, value)
+  return value
+}
+
+function subscribeDashboard(sessionId: string, ws: WebSocket): void {
+  let set = subscribers.get(sessionId)
+  if (!set) {
+    set = new Set()
+    subscribers.set(sessionId, set)
+  }
+  set.add(ws)
+}
+
+function unsubscribeDashboard(sessionId: string, ws: WebSocket): void {
+  const set = subscribers.get(sessionId)
+  if (!set) return
+  set.delete(ws)
+  if (set.size === 0) subscribers.delete(sessionId)
+}
+
+function broadcast(sessionId: string, msg: DashboardPushMessage): void {
+  const set = subscribers.get(sessionId)
+  if (!set || set.size === 0) return
+  const data = JSON.stringify(msg)
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(data)
   }
 }
 
@@ -283,6 +386,8 @@ async function handleCalibrationUpdate(
       },
     }
   )
+  const pxPerDeg = payload.calibration.pxPerDeg
+  sessionPxPerDeg.set(payload.sessionId, typeof pxPerDeg === 'number' ? pxPerDeg : null)
 }
 
 async function handleSessionEnd(
@@ -294,18 +399,16 @@ async function handleSessionEnd(
   const endedAt = new Date(payload.endedAt)
   const durationMs = endedAt.getTime() - new Date(session.startedAt).getTime()
 
-  // Don't overwrite stats — they were incrementally accumulated by handleGazeBatch.
-  // The extension sends hardcoded zeros in session_end; the server-side $inc values
-  // from gaze_batch processing are the ground truth.
+  // Close the still-active page, if any.
+  await Page.updateMany(
+    { sessionId: payload.sessionId, status: 'active' },
+    { $set: { leftAt: endedAt, status: 'complete' } }
+  )
+
+  // Don't overwrite stats — they were incrementally accumulated by handleSlice.
   await Session.updateOne(
     { sessionId: payload.sessionId },
-    {
-      $set: {
-        endedAt,
-        durationMs,
-        status: 'completed',
-      },
-    }
+    { $set: { endedAt, durationMs, status: 'completed' } }
   )
 }
 
@@ -323,9 +426,7 @@ function sendAck(ws: WebSocket, messageType: string, received = 1): void {
     type: 'ack',
     payload: { messageType, received },
   }
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg))
-  }
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
 }
 
 function sendError(ws: WebSocket, code: string, message: string): void {
@@ -333,7 +434,5 @@ function sendError(ws: WebSocket, code: string, message: string): void {
     type: 'error',
     payload: { code, message },
   }
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg))
-  }
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
 }

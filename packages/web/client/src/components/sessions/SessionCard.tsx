@@ -19,7 +19,7 @@ function statusBadge(session: SessionMeta) {
   if (!session.endedAt) {
     return <span className="badge-success">Active</span>
   }
-  return <span className="badge bg-surface-700 text-surface-300">Completed</span>
+  return <span className="badge bg-surface-800 text-surface-300">Completed</span>
 }
 
 export default function SessionCard({
@@ -51,7 +51,7 @@ export default function SessionCard({
             onToggleSelect(session.sessionId)
           }}
           onClick={(e) => e.stopPropagation()}
-          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+          className="checkbox w-4 h-4"
         />
       </td>
       <td className="px-4 py-3 text-sm text-surface-200">

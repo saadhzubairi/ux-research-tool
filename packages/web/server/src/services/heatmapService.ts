@@ -1,80 +1,188 @@
 import { viewportToNormalized } from '@gazekit/shared'
 import type { HeatmapPoint, HeatmapData } from '@gazekit/shared'
-import { GazeEvent } from '../models/GazeEvent'
-import { Screenshot } from '../models/Screenshot'
+import { Page } from '../models/Page'
+import { Slice } from '../models/Slice'
 import { Session } from '../models/Session'
-import { getFixations } from './fixationService'
+import { filePathToUrl } from './screenshotStore'
+import {
+  getLegacySessionHeatmap,
+  getLegacyAggregateForSession,
+} from './legacyHeatmap'
 
-function buildScreenshotUrl(screenshot: Record<string, unknown> | null): string | null {
-  if (!screenshot) return null
-  const filename = screenshot.filename as string | undefined
-  const sessionId = screenshot.sessionId as string | undefined
-  const visitFolder = screenshot.visitFolder as string | undefined
-  const filePath = screenshot.filePath as string | undefined
-  if (filename && sessionId && visitFolder) {
-    return `/api/screenshots/${sessionId}/${visitFolder}/${filename}`
-  }
-  if (filename && sessionId) {
-    return `/api/screenshots/${sessionId}/${filename}`
-  }
-  if (filePath) {
-    return `/api/screenshots/${filePath.split('/').pop()}`
-  }
-  return null
-}
-
+/**
+ * Session heatmap, keyed by Page (a session can revisit the same URL as two
+ * distinct pages, which the old url-keyed query conflated). Reads precomputed
+ * `Slice.fixations` — a pure aggregation, no request-time I-DT — optionally
+ * cut off at a slice index for progressive/scrub playback.
+ */
 export async function getSessionHeatmap(
   sessionId: string,
-  url: string,
-  fromTs?: number,
-  toTs?: number,
+  pageId: string,
+  toSliceIndex?: number,
 ): Promise<HeatmapData> {
-  const fixations = await getFixations(sessionId, url, fromTs, toTs)
-
-  const firstEvent = await GazeEvent.findOne({
-    'meta.sid': sessionId,
-    'ctx.url': url,
-  }).sort({ ts: 1 }).lean()
-
-  const viewportWidth = firstEvent?.ctx?.vw ?? 1920
-  const viewportHeight = firstEvent?.ctx?.vh ?? 1080
-
-  const points: HeatmapPoint[] = fixations.map(f => {
-    const { nx, ny } = viewportToNormalized(f.x, f.y, viewportWidth, viewportHeight)
-    return {
-      nx,
-      ny,
-      value: f.durationMs,
-    }
-  })
-
-  let screenshotDoc: Record<string, unknown> | null = null
-  if (toTs !== undefined) {
-    // In timeline mode, pick screenshot closest to the time bound
-    const toDate = new Date(toTs)
-    const before = await Screenshot.findOne({
-      sessionId, url, capturedAt: { $lte: toDate },
-    }).sort({ capturedAt: -1 }).lean()
-    const after = await Screenshot.findOne({
-      sessionId, url, capturedAt: { $gt: toDate },
-    }).sort({ capturedAt: 1 }).lean()
-
-    if (before && after) {
-      const diffBefore = toDate.getTime() - new Date(before.capturedAt).getTime()
-      const diffAfter = new Date(after.capturedAt).getTime() - toDate.getTime()
-      const pick = diffBefore <= diffAfter ? before : after
-      screenshotDoc = { filePath: pick.filePath, filename: pick.filename, visitFolder: pick.visitFolder, sessionId }
-    } else {
-      const pick = before ?? after
-      screenshotDoc = pick ? { filePath: pick.filePath, filename: pick.filename, visitFolder: pick.visitFolder, sessionId } : null
-    }
-  } else {
-    const latest = await Screenshot.findOne({ sessionId, url })
-      .sort({ capturedAt: -1 }).lean()
-    screenshotDoc = latest ? { filePath: latest.filePath, filename: latest.filename, visitFolder: latest.visitFolder, sessionId } : null
+  const page = await Page.findById(pageId).lean()
+  if (!page || page.sessionId !== sessionId) {
+    return emptyHeatmap(sessionId, page?.url ?? '')
   }
 
-  const screenshotUrl = buildScreenshotUrl(screenshotDoc)
+  const viewportWidth = page.viewport?.width ?? 1920
+  const viewportHeight = page.viewport?.height ?? 1080
+
+  const sliceFilter: Record<string, unknown> = { sessionId, pageId: page._id }
+  if (toSliceIndex !== undefined) {
+    sliceFilter.sliceIndex = { $lte: toSliceIndex }
+  }
+
+  const slices = await Slice.find(sliceFilter)
+    .sort({ sliceIndex: 1 })
+    .select({ sliceIndex: 1, fixations: 1, screenshot: 1 })
+    .lean()
+
+  const points: HeatmapPoint[] = []
+  for (const slice of slices) {
+    for (const f of slice.fixations ?? []) {
+      const { nx, ny } = viewportToNormalized(
+        f.x ?? 0,
+        f.y ?? 0,
+        viewportWidth,
+        viewportHeight,
+      )
+      points.push({ nx, ny, value: f.durationMs ?? 0 })
+    }
+  }
+
+  // Screenshot: the slice at the cutoff (or the latest slice for the page).
+  const screenshotSlice = slices.length > 0 ? slices[slices.length - 1] : null
+  const screenshotUrl = filePathToUrl(screenshotSlice?.screenshot?.filePath)
+
+  return {
+    sessionId,
+    url: page.url ?? '',
+    viewportWidth,
+    viewportHeight,
+    points,
+    screenshotUrl,
+    sessionCount: 1,
+    totalFixations: points.length,
+  }
+}
+
+/**
+ * Cross-session aggregate heatmap for a URL. Still URL-keyed by design
+ * (aggregation is "all sessions that visited this URL"). v2 sessions source
+ * from Page+Slice; v1 sessions fall back to the legacy GazeEvent path.
+ */
+export async function getAggregateHeatmap(
+  url: string,
+  from?: string,
+  to?: string,
+): Promise<HeatmapData> {
+  const sessionFilter: Record<string, unknown> = {}
+  if (from || to) {
+    const dateFilter: Record<string, Date> = {}
+    if (from) dateFilter.$gte = new Date(from)
+    if (to) dateFilter.$lte = new Date(to)
+    sessionFilter.startedAt = dateFilter
+  }
+
+  // v2 sessions: those with a Page on this URL. v1 sessions: those with the
+  // legacy embedded pages.url. Union both sets within the date window.
+  const [v2Pages, v1Sessions] = await Promise.all([
+    Page.find({ url }).select({ sessionId: 1 }).lean(),
+    Session.find({ ...sessionFilter, 'pages.url': url, schemaVersion: { $ne: 2 } })
+      .select({ sessionId: 1 })
+      .lean(),
+  ])
+
+  const v2SessionIds = [...new Set(v2Pages.map((p) => p.sessionId))]
+  // Honor the date window for v2 sessions too.
+  const v2Sessions =
+    v2SessionIds.length > 0
+      ? await Session.find({
+          ...sessionFilter,
+          sessionId: { $in: v2SessionIds },
+        })
+          .select({ sessionId: 1 })
+          .lean()
+      : []
+  const v2Filtered = new Set(v2Sessions.map((s) => s.sessionId))
+
+  const allPoints: HeatmapPoint[] = []
+  let viewportWidth = 1920
+  let viewportHeight = 1080
+  let screenshotUrl: string | null = null
+  let sessionCount = 0
+
+  // v2 sessions — aggregate over Page/Slice.
+  for (const page of v2Pages) {
+    if (!v2Filtered.has(page.sessionId)) continue
+    const data = await getSessionHeatmapForAggregate(page.sessionId, url)
+    if (data.points.length > 0 || data.screenshotUrl) {
+      allPoints.push(...data.points)
+      viewportWidth = data.viewportWidth
+      viewportHeight = data.viewportHeight
+      if (!screenshotUrl) screenshotUrl = data.screenshotUrl
+    }
+    sessionCount++
+  }
+
+  // v1 sessions — legacy path.
+  for (const s of v1Sessions) {
+    const data = await getLegacyAggregateForSession(s.sessionId, url)
+    allPoints.push(...data.points)
+    if (data.points.length > 0) {
+      viewportWidth = data.viewportWidth
+      viewportHeight = data.viewportHeight
+    }
+    if (!screenshotUrl) screenshotUrl = data.screenshotUrl
+    sessionCount++
+  }
+
+  return {
+    sessionId: null,
+    url,
+    viewportWidth,
+    viewportHeight,
+    points: allPoints,
+    screenshotUrl,
+    sessionCount,
+    totalFixations: allPoints.length,
+  }
+}
+
+/** Aggregate all Page-visits of a URL within one v2 session into one point set. */
+async function getSessionHeatmapForAggregate(
+  sessionId: string,
+  url: string,
+): Promise<HeatmapData> {
+  const pages = await Page.find({ sessionId, url }).lean()
+  const points: HeatmapPoint[] = []
+  let viewportWidth = 1920
+  let viewportHeight = 1080
+  let screenshotUrl: string | null = null
+
+  for (const page of pages) {
+    viewportWidth = page.viewport?.width ?? viewportWidth
+    viewportHeight = page.viewport?.height ?? viewportHeight
+    const slices = await Slice.find({ sessionId, pageId: page._id })
+      .sort({ sliceIndex: 1 })
+      .select({ fixations: 1, screenshot: 1 })
+      .lean()
+    for (const slice of slices) {
+      for (const f of slice.fixations ?? []) {
+        const { nx, ny } = viewportToNormalized(
+          f.x ?? 0,
+          f.y ?? 0,
+          viewportWidth,
+          viewportHeight,
+        )
+        points.push({ nx, ny, value: f.durationMs ?? 0 })
+      }
+      if (!screenshotUrl && slice.screenshot?.filePath) {
+        screenshotUrl = filePathToUrl(slice.screenshot.filePath)
+      }
+    }
+  }
 
   return {
     sessionId,
@@ -84,86 +192,23 @@ export async function getSessionHeatmap(
     points,
     screenshotUrl,
     sessionCount: 1,
-    totalFixations: fixations.length,
+    totalFixations: points.length,
   }
 }
 
-export async function getAggregateHeatmap(
-  url: string,
-  from?: string,
-  to?: string
-): Promise<HeatmapData> {
-  const sessionFilter: Record<string, unknown> = {
-    'pages.url': url,
-  }
-
-  if (from || to) {
-    const dateFilter: Record<string, Date> = {}
-    if (from) dateFilter.$gte = new Date(from)
-    if (to) dateFilter.$lte = new Date(to)
-    sessionFilter.startedAt = dateFilter
-  }
-
-  const sessions = await Session.find(sessionFilter).select('sessionId').lean()
-  const sessionIds = sessions.map(s => s.sessionId)
-
-  if (sessionIds.length === 0) {
-    return {
-      sessionId: null,
-      url,
-      viewportWidth: 1920,
-      viewportHeight: 1080,
-      points: [],
-      screenshotUrl: null,
-      sessionCount: 0,
-      totalFixations: 0,
-    }
-  }
-
-  const allPoints: HeatmapPoint[] = []
-  let viewportWidth = 1920
-  let viewportHeight = 1080
-
-  for (const sid of sessionIds) {
-    const fixations = await getFixations(sid, url)
-
-    const firstEvent = await GazeEvent.findOne({
-      'meta.sid': sid,
-      'ctx.url': url,
-    }).sort({ ts: 1 }).lean()
-
-    if (firstEvent?.ctx) {
-      viewportWidth = firstEvent.ctx.vw ?? viewportWidth
-      viewportHeight = firstEvent.ctx.vh ?? viewportHeight
-    }
-
-    for (const f of fixations) {
-      const { nx, ny } = viewportToNormalized(f.x, f.y, viewportWidth, viewportHeight)
-      allPoints.push({
-        nx,
-        ny,
-        value: f.durationMs,
-      })
-    }
-  }
-
-  const aggScreenshot = await Screenshot.findOne({ url })
-    .sort({ capturedAt: -1 }).lean()
-
-  const screenshotUrl = buildScreenshotUrl(
-    aggScreenshot
-      ? { filePath: aggScreenshot.filePath, filename: aggScreenshot.filename, visitFolder: aggScreenshot.visitFolder, sessionId: aggScreenshot.sessionId }
-      : null
-  )
-
+function emptyHeatmap(sessionId: string | null, url: string): HeatmapData {
   return {
-    sessionId: null,
+    sessionId,
     url,
-    viewportWidth,
-    viewportHeight,
-    points: allPoints,
-    screenshotUrl,
-    sessionCount: sessionIds.length,
-    totalFixations: allPoints.length,
+    viewportWidth: 1920,
+    viewportHeight: 1080,
+    points: [],
+    screenshotUrl: null,
+    sessionCount: sessionId ? 1 : 0,
+    totalFixations: 0,
   }
 }
+
+// Re-export the legacy v1 session heatmap so the route can dispatch on
+// schemaVersion without importing two modules.
+export { getLegacySessionHeatmap }

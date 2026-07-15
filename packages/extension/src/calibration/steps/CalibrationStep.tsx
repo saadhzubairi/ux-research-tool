@@ -5,60 +5,89 @@ import { ProgressBar } from '../components/ProgressBar'
 
 interface CalibrationStepProps {
   onComplete: () => void
-  onRecordSample: (x: number, y: number) => void
-  prediction: { x: number; y: number } | null
+  /** Returns true when the sample passed quality filtering */
+  onRecordSample: (x: number, y: number, pointId: string) => boolean
 }
 
-export function CalibrationStep({ onComplete, onRecordSample, prediction }: CalibrationStepProps) {
-  const [currentPointIndex, setCurrentPointIndex] = useState(0)
-  const totalPoints = CALIBRATION_POINTS.length
+const MAX_RETRIES_PER_POINT = 1
 
-  const handlePointComplete = useCallback(() => {
-    const nextIndex = currentPointIndex + 1
-    if (nextIndex >= totalPoints) {
-      onComplete()
-    } else {
-      setCurrentPointIndex(nextIndex)
-    }
-  }, [currentPointIndex, totalPoints, onComplete])
+interface QueueEntry {
+  point: { x: number; y: number }
+  attempt: number
+}
+
+// No live gaze dot here on purpose: rendering the model's prediction during
+// recording pulls the user's eyes off the target and bakes the previous
+// model's error into the new fit.
+export function CalibrationStep({ onComplete, onRecordSample }: CalibrationStepProps) {
+  const [queue, setQueue] = useState<QueueEntry[]>(() =>
+    CALIBRATION_POINTS.map((point) => ({ point, attempt: 0 })),
+  )
+  const [queueIndex, setQueueIndex] = useState(0)
+  const [completedPoints, setCompletedPoints] = useState<Array<{ x: number; y: number }>>([])
+
+  const totalPoints = CALIBRATION_POINTS.length
+  const current = queue[queueIndex]
+
+  const handlePointComplete = useCallback(
+    (accepted: boolean) => {
+      const entry = queue[queueIndex]
+      if (!entry) return
+      let nextQueue = queue
+
+      if (accepted) {
+        setCompletedPoints((prev) => [...prev, entry.point])
+      } else if (entry.attempt < MAX_RETRIES_PER_POINT) {
+        // Too many blinks / face lost — retry this point at the end
+        nextQueue = [...queue, { point: entry.point, attempt: entry.attempt + 1 }]
+        setQueue(nextQueue)
+      }
+
+      const nextIndex = queueIndex + 1
+      if (nextIndex >= nextQueue.length) {
+        onComplete()
+      } else {
+        setQueueIndex(nextIndex)
+      }
+    },
+    [queue, queueIndex, onComplete],
+  )
 
   return (
     <div className="relative h-screen w-screen bg-white">
-      {/* Live gaze dot */}
-      {prediction && (
-        <div
-          className="pointer-events-none fixed z-[99998] rounded-full border-2 border-red-400 bg-red-500/40"
-          style={{
-            left: prediction.x - 10,
-            top: prediction.y - 10,
-            width: 20,
-            height: 20,
-            transition: 'left 0.08s linear, top 0.08s linear',
-          }}
-        />
-      )}
-
       <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center px-4 pt-4">
         <p className="rounded-lg bg-gray-100/90 px-5 py-2.5 text-sm text-gray-700 shadow-sm backdrop-blur">
-          <span className="font-semibold">Stare at each dot</span> as it appears and shrinks. No clicking needed — just keep your eyes on it.
+          <span className="font-semibold">Keep your head still</span> and follow the dot with
+          your eyes only. Try not to blink while it&apos;s shrinking.
         </p>
       </div>
 
-      {CALIBRATION_POINTS.map((point, index) => (
-        <CalibrationDot
-          key={`${point.x}-${point.y}`}
-          position={point}
-          onComplete={handlePointComplete}
-          onRecordSample={onRecordSample}
-          active={index === currentPointIndex}
+      {/* Completed points as subtle checkmarks */}
+      {completedPoints.map((point, i) => (
+        <div
+          key={`done-${i}`}
+          className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-green-500/40"
+          style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }}
         />
       ))}
 
+      {current && (
+        <CalibrationDot
+          key={`${current.point.x}-${current.point.y}-${current.attempt}`}
+          position={current.point}
+          onComplete={handlePointComplete}
+          onRecordSample={(x, y) =>
+            onRecordSample(x, y, `${current.point.x}:${current.point.y}`)
+          }
+          active
+        />
+      )}
+
       <div className="absolute bottom-0 left-0 right-0 z-10 px-8 pb-6">
         <ProgressBar
-          current={currentPointIndex + 1}
-          total={totalPoints}
-          label={`Point ${currentPointIndex + 1}/${totalPoints}`}
+          current={Math.min(queueIndex + 1, queue.length)}
+          total={queue.length}
+          label={`Point ${Math.min(queueIndex + 1, queue.length)}/${queue.length}${queue.length > totalPoints ? ' (retrying)' : ''}`}
         />
       </div>
     </div>

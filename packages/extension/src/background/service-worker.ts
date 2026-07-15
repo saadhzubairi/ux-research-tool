@@ -1,4 +1,5 @@
 import type { ExtensionMessage } from '@gazekit/shared'
+import { normalizeGazeUrl } from '@gazekit/shared'
 import type {
   ExtensionState,
   ExtensionSettings,
@@ -29,8 +30,6 @@ let state: ExtensionState = {
 
 let settings: ExtensionSettings = { ...DEFAULT_SETTINGS }
 
-let screenshotTimer: ReturnType<typeof setInterval> | null = null
-let screenshotIndex = 0
 let initialSetupInProgress = false
 
 // ---------------------------------------------------------------------------
@@ -102,9 +101,9 @@ async function ensureOffscreenDocument(): Promise<void> {
 
 async function sendToOffscreen(
   message: ServiceWorkerToOffscreenMessage,
-): Promise<void> {
+): Promise<unknown> {
   await ensureOffscreenDocument()
-  await chrome.runtime.sendMessage(message)
+  return chrome.runtime.sendMessage(message)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,51 +129,48 @@ async function sendToContentScript(
 }
 
 // ---------------------------------------------------------------------------
-// Screenshot capture
+// Tab-capture stream
+//
+// Replaces captureVisibleTab polling (hard-capped by Chrome at ~2 calls/s).
+// A single chrome.tabCapture MediaStream is handed to the offscreen document,
+// which samples frames from it per slice tick at any rate.
+//
+// getMediaStreamId MUST run in direct response to a genuine user gesture (the
+// "Start Tracking" popup click). We therefore acquire the streamId at the very
+// top of the session-start handler — before ANY of the async gaze-engine start
+// chain — while the gesture is still fresh, and thread it down. It cannot be
+// silently (re)acquired on an MV3 service-worker wake; the cross-origin
+// navigation path (which can tear the stream down) re-requests it best-effort
+// and fails LOUDLY, since no gesture is available there.
 // ---------------------------------------------------------------------------
 
-async function captureScreenshot(): Promise<void> {
-  if (!state.isTracking || !state.currentSessionId) return
+async function getTabStreamId(tabId: number): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
+      if (chrome.runtime.lastError || !streamId) {
+        reject(new Error(chrome.runtime.lastError?.message ?? 'no streamId'))
+        return
+      }
+      resolve(streamId)
+    })
+  })
+}
 
+/** Hand an already-acquired streamId to the offscreen document to open on. */
+async function handStreamToOffscreen(streamId: string): Promise<void> {
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: 'png' })
-
-    const tab = state.activeTabId
-      ? await chrome.tabs.get(state.activeTabId)
-      : null
-
-    const currentIndex = screenshotIndex++
-
-    const message: ExtensionMessage = {
-      type: 'page_screenshot',
-      payload: {
-        sessionId: state.currentSessionId,
-        url: tab?.url ?? '',
-        dataUrl,
-        scrollY: 0,
-        viewportHeight: 0,
-        index: currentIndex,
-      },
-    }
-
-    await sendToOffscreen({ type: 'send', message })
-  } catch {
-    // Tab may not be capturable (e.g. chrome:// pages)
+    await sendToOffscreen({ type: 'start_tab_stream', streamId })
+    console.log('[GazeKit SW] Tab-capture stream handed to offscreen')
+  } catch (err) {
+    console.warn('[GazeKit SW] Failed to hand tab-capture stream to offscreen:', err)
   }
 }
 
-function startScreenshotInterval(): void {
-  stopScreenshotInterval()
-  screenshotTimer = setInterval(
-    () => void captureScreenshot(),
-    settings.screenshotIntervalMs,
-  )
-}
-
-function stopScreenshotInterval(): void {
-  if (screenshotTimer !== null) {
-    clearInterval(screenshotTimer)
-    screenshotTimer = null
+async function stopTabCapture(): Promise<void> {
+  try {
+    await sendToOffscreen({ type: 'stop_tab_stream' })
+  } catch {
+    // Offscreen doc may already be gone
   }
 }
 
@@ -197,9 +193,23 @@ async function startSession(targetTabId?: number): Promise<string> {
     tabId = fallback.id
   }
 
-  // 2. Get tab info and update state immediately so popup sees isTracking: true
+  // 2. Acquire the tab-capture streamId NOW, while the "Start Tracking" user
+  // gesture is still fresh — before any of the heavy async start chain. Chrome
+  // only grants getMediaStreamId in direct response to the gesture, so this
+  // ordering (not deferring it into the background chain) is the whole point.
+  // Best-effort: if it fails the session still runs, just with empty frames.
+  let tabStreamId: string | null = null
+  try {
+    tabStreamId = await getTabStreamId(tabId)
+  } catch (err) {
+    console.error(
+      '[GazeKit SW] ❌ Failed to acquire tab-capture stream on the start gesture — screenshots will be empty this session:',
+      err,
+    )
+  }
+
+  // 3. Get tab info and update state immediately so popup sees isTracking: true
   const tab = await chrome.tabs.get(tabId)
-  screenshotIndex = 0
   state.currentSessionId = sessionId
   state.isTracking = true
   state.isPaused = false
@@ -207,13 +217,17 @@ async function startSession(targetTabId?: number): Promise<string> {
   state.activeTabUrl = tab.url ?? null
   await saveState()
 
-  // 3. Kick off the heavy async work in the background (don't block the response)
-  void startSessionBackground(sessionId, tabId)
+  // 4. Kick off the heavy async work in the background (don't block the response)
+  void startSessionBackground(sessionId, tabId, tabStreamId)
 
   return sessionId
 }
 
-async function startSessionBackground(sessionId: string, tabId: number): Promise<void> {
+async function startSessionBackground(
+  sessionId: string,
+  tabId: number,
+  tabStreamId: string | null,
+): Promise<void> {
   initialSetupInProgress = true
   try {
     // Focus the target tab
@@ -225,6 +239,13 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
     await ensureOffscreenDocument()
     console.log('[GazeKit SW] Connecting WebSocket...')
     await sendToOffscreen({ type: 'connect', port: settings.wsPort })
+
+    // Hand the gesture-fresh tab-capture streamId to the offscreen doc as soon
+    // as it exists — streamIds are short-lived, so consume it early rather than
+    // after the gaze-engine start chain.
+    if (tabStreamId) {
+      await handStreamToOffscreen(tabStreamId)
+    }
 
     // 2. Start tracking in content script BEFORE gaze engine
     //    (ensures isTracking=true when samples arrive)
@@ -267,13 +288,33 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
       console.error('[GazeKit SW] ❌ Failed to send start_tracking after 10 attempts!')
     }
 
-    // 3. Start gaze engine AFTER content script is tracking
-    console.log('[GazeKit SW] Starting gaze engine...')
-    await sendToOffscreen({ type: 'start_gaze' })
-    console.log('[GazeKit SW] Gaze engine started')
+    // Push the tab's zoom factor so the content script can convert
+    // screen-px gaze samples into its own CSS px
+    try {
+      const zoomFactor = await chrome.tabs.getZoom(tabId)
+      await sendToContentScript(tabId, { type: 'zoom_update', zoomFactor })
+    } catch (err) {
+      console.warn('[GazeKit SW] Failed to push zoom factor:', err)
+    }
 
-    // Start screenshot capture interval
-    startScreenshotInterval()
+    // 3. Start gaze engine AFTER content script is tracking. A failed start
+    // (no camera, no valid model) must abort the session — otherwise it runs
+    // "active" while recording nothing.
+    console.log('[GazeKit SW] Starting gaze engine...')
+    const gazeResponse = (await sendToOffscreen({ type: 'start_gaze' })) as
+      | { started?: boolean; cameraMismatch?: boolean; error?: string }
+      | undefined
+    if (!gazeResponse?.started) {
+      throw new Error(`Gaze engine failed to start: ${gazeResponse?.error ?? 'no response'}`)
+    }
+    if (gazeResponse.cameraMismatch) {
+      console.warn(
+        '[GazeKit SW] ⚠ Session camera/resolution differs from calibration — accuracy degraded, recalibration recommended',
+      )
+    }
+    console.log('[GazeKit SW] Gaze engine started')
+    // (Tab-capture stream was already handed to offscreen above, on the fresh
+    // start gesture — not here, where the gesture would be long gone.)
 
     // Send session_start to server via offscreen (use real calibration data)
     const cal = state.lastCalibration
@@ -308,6 +349,10 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
               screenHeight: cal.screenHeight,
               dpr: cal.dpr,
               calibratedAt: cal.calibratedAt,
+              screenDiagonalMm: cal.screenDiagonalMm ?? null,
+              viewingDistanceMm: cal.viewingDistanceMm ?? null,
+              pxPerDeg: cal.pxPerDeg ?? null,
+              avgErrorDeg: cal.avgErrorDeg ?? null,
             }
           : {
               method: '6-point-polynomial',
@@ -327,7 +372,7 @@ async function startSessionBackground(sessionId: string, tabId: number): Promise
         },
         pages: [
           {
-            url: targetTab.url ?? '',
+            url: normalizeGazeUrl(targetTab.url ?? ''),
             enteredAt: new Date().toISOString(),
             leftAt: null,
           },
@@ -394,8 +439,8 @@ async function stopSession(): Promise<void> {
     // Offscreen doc may already be gone
   }
 
-  // 4. Stop screenshot interval
-  stopScreenshotInterval()
+  // 4. Stop the tab-capture stream
+  await stopTabCapture()
 
   // 5. Update state
   state.currentSessionId = null
@@ -446,6 +491,9 @@ chrome.runtime.onMessage.addListener(
 )
 
 async function handleMessage(message: InboundMessage): Promise<unknown> {
+  // MV3 can revive this worker for any event — state must be hydrated from
+  // storage before any handler reads it
+  await stateReady
   switch (message.type) {
     // -------------------------------------------------------------------
     // Popup messages
@@ -503,22 +551,11 @@ async function handleMessage(message: InboundMessage): Promise<unknown> {
     // -------------------------------------------------------------------
     // Content script messages
     // -------------------------------------------------------------------
-    case 'gaze_batch': {
-      console.log(`[GazeKit SW] Forwarding gaze_batch: ${message.payload.events.length} events, batch=#${message.payload.batchIndex}`)
-      const gazeBatchMessage: ExtensionMessage = {
-        type: 'gaze_batch',
-        payload: message.payload,
-      }
-      await sendToOffscreen({ type: 'send', message: gazeBatchMessage })
-      return { forwarded: true }
-    }
-
-    case 'rrweb_events': {
-      const rrwebMessage: ExtensionMessage = {
-        type: 'rrweb_events',
-        payload: message.payload,
-      }
-      await sendToOffscreen({ type: 'send', message: rrwebMessage })
+    case 'slice': {
+      // The content script produced a slice (gaze + envelope). The offscreen
+      // document owns the tab-capture canvas + WS client, so it grabs the
+      // current frame, fills screenshotDataUrl, and sends the assembled slice.
+      await sendToOffscreen({ type: 'send_slice', payload: message.payload })
       return { forwarded: true }
     }
 
@@ -529,25 +566,19 @@ async function handleMessage(message: InboundMessage): Promise<unknown> {
       return { received: true }
     }
 
-    case 'page_change': {
-      if (message.heatmapDataUrl && state.currentSessionId) {
-        const heatmapMessage: ExtensionMessage = {
-          type: 'page_screenshot',
-          payload: {
-            sessionId: state.currentSessionId,
-            url: message.url,
-            dataUrl: message.heatmapDataUrl,
-            scrollY: 0,
-            viewportHeight: 0,
-          },
-        }
-        try {
-          await sendToOffscreen({ type: 'send', message: heatmapMessage })
-        } catch {
-          // Non-fatal — best-effort delivery
-        }
+    case 'gaze_click_anchor': {
+      // Clicks are drift-correction ground truth for the offscreen gaze engine
+      try {
+        await sendToOffscreen({
+          type: 'click_anchor',
+          screenX: message.screenX,
+          screenY: message.screenY,
+          ts: message.ts,
+        })
+      } catch {
+        // Non-fatal — drift correction just skips this click
       }
-      return { received: true }
+      return { forwarded: true }
     }
 
     // -------------------------------------------------------------------
@@ -630,11 +661,40 @@ async function handleServerCommand(
 }
 
 // ---------------------------------------------------------------------------
+// Zoom listener — keep the tracked tab's screen-px -> CSS-px conversion valid
+// ---------------------------------------------------------------------------
+
+chrome.tabs.onZoomChange.addListener((zoomChangeInfo) => {
+  void (async () => {
+    await stateReady
+    if (!state.isTracking || zoomChangeInfo.tabId !== state.activeTabId) return
+    try {
+      await sendToContentScript(zoomChangeInfo.tabId, {
+        type: 'zoom_update',
+        zoomFactor: zoomChangeInfo.newZoomFactor,
+      })
+    } catch {
+      // Non-fatal — the content script may not be attached yet
+    }
+  })()
+})
+
+// ---------------------------------------------------------------------------
 // Tab navigation listener — re-attach tracking on full-page navigation
 // ---------------------------------------------------------------------------
 
 chrome.tabs.onUpdated.addListener(
   (tabId, changeInfo, tab) => {
+    void handleTabUpdated(tabId, changeInfo, tab)
+  },
+)
+
+async function handleTabUpdated(
+  tabId: number,
+  changeInfo: chrome.tabs.TabChangeInfo,
+  tab: chrome.tabs.Tab,
+): Promise<void> {
+    await stateReady
     // Only care about the tracked tab completing a navigation
     if (
       !state.isTracking ||
@@ -660,14 +720,28 @@ chrome.tabs.onUpdated.addListener(
 
     // Re-send start_tracking to the fresh content script.
     // This fires on both navigation to a new URL and page refresh (same URL).
-    console.log(`[GazeKit SW] Tab loaded: ${state.activeTabUrl} → ${newUrl}`)
+    const prevUrl = state.activeTabUrl
+    console.log(`[GazeKit SW] Tab loaded: ${prevUrl} → ${newUrl}`)
     state.activeTabUrl = newUrl
     void saveState()
-    void reattachTracking(tabId)
-  },
-)
 
-async function reattachTracking(tabId: number): Promise<void> {
+    // Chrome can tear the tab-capture stream down on a cross-origin navigation.
+    // Re-request one in that case (best-effort — getMediaStreamId ideally wants
+    // a user gesture; a navigation has none, so this may fail and is flagged).
+    const reacquireStream = isCrossOrigin(prevUrl, newUrl)
+    void reattachTracking(tabId, reacquireStream)
+}
+
+function isCrossOrigin(a: string | null, b: string): boolean {
+  if (!a) return true
+  try {
+    return new URL(a).origin !== new URL(b).origin
+  } catch {
+    return true
+  }
+}
+
+async function reattachTracking(tabId: number, reacquireStream: boolean): Promise<void> {
   if (!state.currentSessionId) return
 
   const trackingMsg: ServiceWorkerToContentMessage = {
@@ -687,8 +761,37 @@ async function reattachTracking(tabId: number): Promise<void> {
       if (response?.success) {
         console.log('[GazeKit SW] ✓ Tracking re-attached on new page')
 
-        // Take an initial screenshot of the new page
-        void captureScreenshot()
+        // Re-push the zoom factor to the fresh content script
+        try {
+          const zoomFactor = await chrome.tabs.getZoom(tabId)
+          await sendToContentScript(tabId, { type: 'zoom_update', zoomFactor })
+        } catch {
+          // Non-fatal
+        }
+
+        // Re-acquire the tab-capture stream if the navigation likely killed it.
+        // No user gesture exists on a navigation, so Chrome may reject this —
+        // fail LOUDLY and degrade to empty screenshots until the user
+        // re-interacts, rather than swallowing it silently.
+        if (reacquireStream) {
+          try {
+            const streamId = await getTabStreamId(tabId)
+            await handStreamToOffscreen(streamId)
+          } catch (err) {
+            console.error(
+              '[GazeKit SW] ❌ Could not re-acquire tab-capture stream after cross-origin navigation (no user gesture available) — screenshots will be EMPTY until tracking is restarted from a fresh click:',
+              err,
+            )
+          }
+        }
+
+        // Emit an immediate slice for the new page (trigger 'navigation'):
+        // server closes the old Page and opens a new one.
+        try {
+          await sendToContentScript(tabId, { type: 'navigation_slice' })
+        } catch {
+          // Non-fatal
+        }
         return
       }
     } catch {
@@ -704,4 +807,6 @@ async function reattachTracking(tabId: number): Promise<void> {
 // Initialization
 // ---------------------------------------------------------------------------
 
-void initState()
+// Hydration promise: every event handler awaits this before reading `state`,
+// because MV3 revives the worker with default in-memory state
+const stateReady = initState()

@@ -4,9 +4,19 @@ import { FaceGuide } from '../components/FaceGuide'
 interface CameraStepProps {
   onNext: (stream: MediaStream) => void
   onFaceDetected: (detected: boolean) => void
+  /** Physical screen diagonal in inches, or null when unknown/skipped */
+  screenDiagonalIn: number | null
+  onScreenDiagonalChange: (inches: number | null) => void
 }
 
-export function CameraStep({ onNext, onFaceDetected }: CameraStepProps) {
+const DIAGONAL_PRESETS = [13.3, 14, 16, 24, 27]
+
+export function CameraStep({
+  onNext,
+  onFaceDetected,
+  screenDiagonalIn,
+  onScreenDiagonalChange,
+}: CameraStepProps) {
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [faceDetected, setFaceDetected] = useState(false)
@@ -65,8 +75,17 @@ export function CameraStep({ onNext, onFaceDetected }: CameraStepProps) {
   useEffect(() => {
     const requestCamera = async () => {
       try {
+        // MUST match the session engine's constraints (offscreen.ts) — the
+        // gaze features come from frame-normalized landmarks, so a different
+        // capture aspect ratio shifts the whole feature space between fit
+        // and predict
         const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' },
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 },
+            facingMode: 'user',
+          },
         })
         setStream(mediaStream)
         if (videoRef.current) {
@@ -143,6 +162,47 @@ export function CameraStep({ onNext, onFaceDetected }: CameraStepProps) {
         goodLighting={goodLighting}
         appropriateDistance={appropriateDistance}
       />
+
+      <div className="w-[400px] rounded-xl border border-gray-200 bg-white p-4">
+        <p className="text-sm font-medium text-gray-700">Screen size (diagonal)</p>
+        <p className="mt-0.5 text-xs text-gray-500">
+          Optional — lets GazeKit measure accuracy in visual degrees instead of raw pixels.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {DIAGONAL_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              onClick={() =>
+                onScreenDiagonalChange(screenDiagonalIn === preset ? null : preset)
+              }
+              className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                screenDiagonalIn === preset
+                  ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                  : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {preset}&Prime;
+            </button>
+          ))}
+          <input
+            type="number"
+            min={5}
+            max={100}
+            step={0.1}
+            value={
+              screenDiagonalIn !== null && !DIAGONAL_PRESETS.includes(screenDiagonalIn)
+                ? screenDiagonalIn
+                : ''
+            }
+            onChange={(e) => {
+              const v = e.target.valueAsNumber
+              onScreenDiagonalChange(Number.isFinite(v) && v > 0 ? v : null)
+            }}
+            placeholder="Custom"
+            className="w-20 rounded-lg border border-gray-300 px-2 py-1.5 text-xs text-gray-700 focus:border-indigo-500 focus:outline-none"
+          />
+        </div>
+      </div>
 
       <button
         onClick={() => stream && onNext(stream)}

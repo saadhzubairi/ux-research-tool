@@ -15,6 +15,16 @@ export interface SessionsQuery {
   to?: string
 }
 
+export interface SlicesQuery {
+  from?: string // slice-index or timestamp cutoff (inclusive)
+  to?: string
+  includePoints?: boolean // include raw gaze `points` (omitted by default)
+}
+
+// NOTE: the slices endpoint returns `ApiResponse<SliceListItem[]>` (bare
+// array) with an `X-Total-Count` response header — matching the `/elements`
+// precedent. There is intentionally no `{total, slices}` wrapper type.
+
 export interface HeatmapData {
   sessionId: string | null
   url: string

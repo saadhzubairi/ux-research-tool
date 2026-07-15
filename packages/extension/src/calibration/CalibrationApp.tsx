@@ -1,10 +1,16 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
+import {
+  CALIBRATION_QUALITY,
+  CALIBRATION_QUALITY_DEG,
+  derivePhysicalScreen,
+} from '@gazekit/shared'
+import { modelPxPerDeg, type GazeModel } from '../offscreen/regression'
 import { useMediaPipe } from './hooks/useMediaPipe'
 import { VideoPreview } from './components/VideoPreview'
 import { CameraStep } from './steps/CameraStep'
 import { FaceCheckStep } from './steps/FaceCheckStep'
 import { CalibrationStep } from './steps/CalibrationStep'
-import { ValidationStep } from './steps/ValidationStep'
+import { ValidationStep, type ValidationResult } from './steps/ValidationStep'
 import { ResultsStep } from './steps/ResultsStep'
 import { TabPickerStep } from './steps/TabPickerStep'
 
@@ -16,12 +22,68 @@ type CalibrationStage =
   | 'results'
   | 'tab-picker'
 
+export type CalibrationQualityTier = 'good' | 'usable' | 'poor'
+
+export function qualityTier(
+  result: ValidationResult,
+  pxPerDeg?: number | null,
+): CalibrationQualityTier {
+  if (!Number.isFinite(result.medianErrorPx) || result.sampleCoverage < 0.5) {
+    return 'poor'
+  }
+  // With physical screen info, gate on visual degrees — the same angular
+  // accuracy should pass on a 13" laptop and a 27" monitor alike.
+  if (typeof pxPerDeg === 'number' && Number.isFinite(pxPerDeg) && pxPerDeg > 0) {
+    const errDeg = result.medianErrorPx / pxPerDeg
+    if (errDeg > CALIBRATION_QUALITY_DEG.USABLE_MEDIAN_DEG) return 'poor'
+    if (errDeg > CALIBRATION_QUALITY_DEG.GOOD_MEDIAN_DEG) return 'usable'
+    return 'good'
+  }
+  const diag = Math.hypot(window.innerWidth, window.innerHeight)
+  if (result.medianErrorPx > CALIBRATION_QUALITY.USABLE_DIAG_FRACTION * diag) {
+    return 'poor'
+  }
+  if (result.medianErrorPx > CALIBRATION_QUALITY.GOOD_DIAG_FRACTION * diag) {
+    return 'usable'
+  }
+  return 'good'
+}
+
 export function CalibrationApp() {
   const [stage, setStage] = useState<CalibrationStage>('camera')
   const [stream, setStream] = useState<MediaStream | null>(null)
-  const [avgErrorPx, setAvgErrorPx] = useState(0)
+  const [validation, setValidation] = useState<ValidationResult | null>(null)
+  const [tier, setTier] = useState<CalibrationQualityTier>('poor')
+  const [modelSaved, setModelSaved] = useState(false)
+  const [fitError, setFitError] = useState<string | null>(null)
   const faceDetectedRef = useRef(false)
+  const modelRef = useRef<GazeModel | null>(null)
   const mediapipe = useMediaPipe()
+
+  // Physical screen diagonal (inches) — optional, remembered across
+  // calibrations. Ref mirror keeps stage callbacks stable.
+  const [screenDiagonalIn, setScreenDiagonalIn] = useState<number | null>(null)
+  const screenDiagonalRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    chrome.storage.local.get('gazekit:screenDiagonalIn').then((stored) => {
+      const v = stored['gazekit:screenDiagonalIn'] as unknown
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        setScreenDiagonalIn(v)
+        screenDiagonalRef.current = v
+      }
+    })
+  }, [])
+
+  const handleScreenDiagonalChange = useCallback((inches: number | null) => {
+    setScreenDiagonalIn(inches)
+    screenDiagonalRef.current = inches
+    if (inches !== null) {
+      void chrome.storage.local.set({ 'gazekit:screenDiagonalIn': inches })
+    } else {
+      void chrome.storage.local.remove('gazekit:screenDiagonalIn')
+    }
+  }, [])
 
   const handleCameraNext = useCallback(
     async (mediaStream: MediaStream) => {
@@ -38,45 +100,87 @@ export function CalibrationApp() {
   }, [])
 
   const handleFaceCheckNext = useCallback(() => {
+    setFitError(null)
     setStage('calibration')
   }, [])
 
-  const handleCalibrationComplete = useCallback(async () => {
-    // Solve the polynomial model NOW — before validation needs predictions
-    await exportModelRef.current()
-    setStage('validation')
+  // Refs keep hook functions accessible without making callbacks unstable
+  const exportModelRef = useRef(mediapipe.exportModel)
+  exportModelRef.current = mediapipe.exportModel
+  const resetCalibrationRef = useRef(mediapipe.resetCalibration)
+  resetCalibrationRef.current = mediapipe.resetCalibration
+
+  const handleCalibrationComplete = useCallback(() => {
+    // Fit the model NOW — validation needs live predictions
+    try {
+      const model = exportModelRef.current()
+      // refInterocular (median inter-ocular distance across calibration
+      // frames) doubles as the viewing-distance estimate input
+      const diagonal = screenDiagonalRef.current
+      model.physical = diagonal
+        ? derivePhysicalScreen(
+            window.screen.width,
+            window.screen.height,
+            diagonal,
+            model.refInterocular,
+          )
+        : null
+      modelRef.current = model
+      setFitError(null)
+      setStage('validation')
+    } catch (err) {
+      // Degenerate fit (too many failed points / no variation) — recalibrate
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[GazeKit] Calibration fit failed:', message)
+      setFitError(
+        'Calibration failed: not enough clean samples were collected. ' +
+          'Make sure your face stays visible and well-lit, then try again.',
+      )
+      resetCalibrationRef.current()
+      setStage('face-check')
+    }
   }, [])
 
   const handleRecordSample = useCallback(
-    (x: number, y: number) => {
-      mediapipe.recordScreenPosition(x, y)
-    },
+    (x: number, y: number, pointId: string): boolean =>
+      mediapipe.recordScreenPosition(x, y, pointId),
     [mediapipe]
   )
 
-  // Ref keeps exportModel accessible without making the callback unstable
-  const exportModelRef = useRef(mediapipe.exportModel)
-  exportModelRef.current = mediapipe.exportModel
+  const handleValidationComplete = useCallback(async (result: ValidationResult) => {
+    setValidation(result)
+    const resultTier = qualityTier(result, modelPxPerDeg(modelRef.current))
+    setTier(resultTier)
 
-  const handleValidationComplete = useCallback(async (avgError: number) => {
-    setAvgErrorPx(avgError)
-    const modelData = await exportModelRef.current()
-    if (modelData) {
-      await chrome.storage.local.set({
-        'gazekit:model': {
-          coeffsX: modelData.coeffsX,
-          coeffsY: modelData.coeffsY,
-          calibratedAt: new Date().toISOString(),
-          screenWidth: window.screen.width,
-          screenHeight: window.screen.height,
+    // Persist ONLY calibrations that passed the quality gate — a session run
+    // on a model with known-bad validation produces worthless heatmaps.
+    const model = modelRef.current
+    let saved = false
+    if (model && resultTier !== 'poor') {
+      const withValidation: GazeModel = {
+        ...model,
+        validation: {
+          medianErrorPx: result.medianErrorPx,
+          p95ErrorPx: result.p95ErrorPx,
+          precisionPx: result.precisionPx,
         },
-      })
+      }
+      try {
+        await chrome.storage.local.set({ 'gazekit:model': withValidation })
+        saved = true
+      } catch (err) {
+        console.error('[GazeKit] Failed to persist calibration model:', err)
+        setFitError('The calibration could not be saved — please recalibrate.')
+      }
     }
+    setModelSaved(saved)
     setStage('results')
   }, [])
 
   const handleRecalibrate = useCallback(() => {
     mediapipe.resetCalibration()
+    setModelSaved(false)
+    setValidation(null)
     setStage('calibration')
   }, [mediapipe])
 
@@ -122,6 +226,14 @@ export function CalibrationApp() {
         <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-center">
           <p className="text-sm font-medium text-red-700">Eye Tracking Error</p>
           <p className="mt-1 text-xs text-red-600">{mediapipe.error}</p>
+        </div>
+      )}
+
+      {/* Calibration fit failure banner */}
+      {fitError && stage !== 'calibration' && (
+        <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-center">
+          <p className="text-sm font-medium text-amber-800">Calibration Needs Another Try</p>
+          <p className="mt-1 text-xs text-amber-700">{fitError}</p>
         </div>
       )}
 
@@ -174,13 +286,18 @@ export function CalibrationApp() {
 
       <div className="relative flex-1">
         {stage === 'camera' && (
-          <CameraStep onNext={handleCameraNext} onFaceDetected={handleFaceDetected} />
+          <CameraStep
+            onNext={handleCameraNext}
+            onFaceDetected={handleFaceDetected}
+            screenDiagonalIn={screenDiagonalIn}
+            onScreenDiagonalChange={handleScreenDiagonalChange}
+          />
         )}
         {stage === 'face-check' && (
-          <FaceCheckStep faceDetected={mediapipe.faceDetected || faceDetectedRef.current} onNext={handleFaceCheckNext} />
+          <FaceCheckStep faceDetected={mediapipe.faceDetected} onNext={handleFaceCheckNext} />
         )}
         {stage === 'calibration' && (
-          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} prediction={mediapipe.prediction} />
+          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} />
         )}
         {stage === 'validation' && (
           <ValidationStep
@@ -190,9 +307,12 @@ export function CalibrationApp() {
             onComplete={handleValidationComplete}
           />
         )}
-        {stage === 'results' && (
+        {stage === 'results' && validation && (
           <ResultsStep
-            avgErrorPx={avgErrorPx}
+            validation={validation}
+            tier={tier}
+            modelSaved={modelSaved}
+            physical={modelRef.current?.physical ?? null}
             onRecalibrate={handleRecalibrate}
             onStartTracking={handleStartTracking}
           />

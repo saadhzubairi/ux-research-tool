@@ -14,7 +14,7 @@ gazekit/
 │       └── server/         # Express + MongoDB + WebSocket server
 ```
 
-**Chrome Extension** captures webcam gaze via WebGazer.js, maps gaze to DOM elements, records DOM via rrweb, and streams everything over WebSocket.
+**Chrome Extension** runs MediaPipe FaceLandmarker in an offscreen document to extract head-invariant eye features from the webcam, maps them to screen coordinates with a per-user ridge regression model, maps gaze to DOM elements, records the DOM via rrweb, and streams everything over WebSocket.
 
 **Web App** receives gaze streams, stores sessions in MongoDB, generates heatmaps, provides gaze replay synchronized with DOM recordings, and serves as the researcher dashboard.
 
@@ -28,16 +28,16 @@ gazekit/
 ### Setup
 
 ```bash
-# Install all dependencies
+# Install all dependencies (also downloads the MediaPipe face landmarker model)
 npm install
 
 # Build the shared types package
 npm run build --workspace=packages/shared
 
-# Start the server (needs MongoDB running)
+# Start the server (needs MongoDB running; HTTP on :4444, WebSocket on :8765)
 npm run dev --workspace=packages/web/server
 
-# Start the dashboard
+# Start the dashboard (Vite dev server on :5173)
 npm run dev --workspace=packages/web/client
 
 # Build the Chrome extension
@@ -52,23 +52,34 @@ npm run build --workspace=packages/extension
 ### Usage
 1. Start the server and dashboard
 2. Click the GazeKit extension icon
-3. Run calibration (9-point, ~45 seconds)
-4. Click "Start Tracking" on any webpage
-5. View heatmaps and replay in the dashboard at `http://localhost:3000`
+3. Run calibration (13-point, ~1 minute) — keep your head still and follow the dot with your eyes
+4. If validation passes the quality gate, click "Start Tracking" on any webpage
+5. View heatmaps and replay in the dashboard at `http://localhost:5173`
 
 ## Tech Stack
 
 - **Language**: TypeScript (strict mode)
-- **Extension**: Manifest V3, WebGazer.js, rrweb, @medv/finder
+- **Extension**: Manifest V3, MediaPipe FaceLandmarker (`@mediapipe/tasks-vision`), rrweb, @medv/finder
 - **Frontend**: React 18, Vite, TailwindCSS, Zustand, Tanstack Query
 - **Backend**: Express.js, MongoDB (time series collections), ws
-- **Shared**: I-DT fixation detection, coordinate normalization, CSS selector generation
+- **Shared**: I-DT fixation detection, screen↔viewport coordinate conversion, CSS selector generation
+
+## How the Gaze Pipeline Works
+
+1. **Landmarks** — MediaPipe FaceLandmarker (with blendshapes) runs once per camera frame at 1280×720 via `requestVideoFrameCallback`.
+2. **Features** — landmarks are canonicalized into a face-attached frame (removing head translation, scale, and rotation), producing a 17-dimensional feature vector: per-eye iris offsets, eyelid apertures, head pose, blendshape gaze scores, face position/depth proxies, and quadratic iris terms.
+3. **Mapping** — closed-form ridge regression per axis, with λ picked per user by leave-one-calibration-point-out cross-validation. Calibration samples are blink-rejected (adaptive eye-aspect-ratio threshold) and MAD-trimmed.
+4. **Runtime** — blink gating, saccade-aware jump filtering with One Euro smoothing, click-anchored drift correction, and per-sample confidence from head-pose deviation.
+5. **Coordinates** — the model predicts global screen pixels; the content script converts to viewport coordinates using live window geometry and tab zoom, so sessions survive window moves, resizes, zoom changes, and DevTools opening after calibration.
+
+See [docs/EYE_TRACKING_REVAMP.md](docs/EYE_TRACKING_REVAMP.md) for the full design rationale and research sources.
 
 ## Features
 
-- **Real eye tracking** via webcam using WebGazer.js (ridge regression + TFFacemesh)
+- **Real eye tracking** via webcam — MediaPipe face/iris landmarks + per-user ridge regression (no third-party gaze library)
 - **DOM-aware gaze mapping** — knows which element you're looking at, not just pixel coordinates
-- **9-point calibration** with validation and accuracy scoring
+- **13-point calibration** with a 5-point validation pass and a hard quality gate (poor calibrations are never saved)
+- **Gaze playground** — live dot following your eyes, for sanity-checking a calibration
 - **rrweb DOM recording** with custom gaze plugin for synchronized replay
 - **Fixation detection** via I-DT (Identification by Dispersion Threshold) algorithm
 - **Heatmaps** — per-session and aggregated across sessions, with screenshot overlay
@@ -79,14 +90,14 @@ npm run build --workspace=packages/extension
 
 ## Known Limitations
 
-- Accuracy is ~100-200px (section-level attention, not button-level)
+- Realistic accuracy is ~1.5–2° (roughly 60–110 px at laptop geometry) with a mostly-still head; free head movement roughly doubles error
+- Vertical accuracy is inherently worse than horizontal (eyelids occlude the iris)
 - Glasses significantly degrade accuracy
 - Requires good, even facial lighting
-- Calibration invalidated by window resize
 - One tab tracked at a time
 - Cross-origin iframes cannot be pierced
-- WebGazer.js is GPLv3
+- Heatmaps below the fold are not yet scroll-compensated (server-side follow-up)
 
 ## License
 
-GPL-3.0 (due to WebGazer.js dependency)
+TBD — the former GPL-3.0 constraint no longer applies since WebGazer.js was replaced with an in-house pipeline (MediaPipe Tasks is Apache-2.0).

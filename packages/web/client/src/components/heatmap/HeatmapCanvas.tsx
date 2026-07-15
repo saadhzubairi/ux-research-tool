@@ -1,12 +1,34 @@
-import { useEffect, useRef, useCallback } from 'react'
-import type { HeatmapData } from '@gazekit/shared'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
+import type { ReactNode } from 'react'
+import type { HeatmapData, SliceFixation } from '@gazekit/shared'
 
 interface HeatmapCanvasProps {
-  data: HeatmapData | null
+  /** Aggregate/legacy source (HeatmapsPage aggregate + compare views). */
+  data?: HeatmapData | null
+  /**
+   * Slice source (SessionDetailPage): cumulative fixations across
+   * slices[0..currentSlice]. Normalized against viewportWidth/Height (taken
+   * from the current slice's screenshot). Weighted by durationMs.
+   */
+  fixations?: SliceFixation[]
+  viewportWidth?: number
+  viewportHeight?: number
+  screenshotUrl?: string | null
   opacity: number
   blurRadius: number
   showFixations: boolean
   screenshotUrlOverride?: string | null
+  /** Overlay layer (e.g. gaze trail) positioned over the screenshot. */
+  children?: ReactNode
+}
+
+interface ResolvedHeatmap {
+  viewportWidth: number
+  viewportHeight: number
+  points: Array<{ nx: number; ny: number; value: number }>
+  screenshotUrl: string | null
+  totalFixations: number
+  pointCount: number
 }
 
 function buildPalette(): Uint8Array {
@@ -82,16 +104,53 @@ function renderHeatmap(
 
 export default function HeatmapCanvas({
   data,
+  fixations,
+  viewportWidth,
+  viewportHeight,
+  screenshotUrl,
   opacity,
   blurRadius,
   showFixations,
   screenshotUrlOverride,
+  children,
 }: HeatmapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+  // Normalize either source into one shape the renderer understands.
+  const resolved: ResolvedHeatmap | null = useMemo(() => {
+    if (fixations) {
+      const vw = viewportWidth || 1
+      const vh = viewportHeight || 1
+      const points = fixations.map((f) => ({
+        nx: f.x / vw,
+        ny: f.y / vh,
+        value: f.durationMs || 1,
+      }))
+      return {
+        viewportWidth: vw,
+        viewportHeight: vh,
+        points,
+        screenshotUrl: screenshotUrl ?? null,
+        totalFixations: fixations.length,
+        pointCount: points.length,
+      }
+    }
+    if (data) {
+      return {
+        viewportWidth: data.viewportWidth,
+        viewportHeight: data.viewportHeight,
+        points: data.points,
+        screenshotUrl: data.screenshotUrl,
+        totalFixations: data.totalFixations,
+        pointCount: data.points.length,
+      }
+    }
+    return null
+  }, [data, fixations, viewportWidth, viewportHeight, screenshotUrl])
+
   const paint = useCallback(() => {
-    if (!canvasRef.current || !containerRef.current || !data) return
+    if (!canvasRef.current || !containerRef.current || !resolved) return
 
     const container = containerRef.current
     const canvas = canvasRef.current
@@ -102,20 +161,21 @@ export default function HeatmapCanvas({
     canvas.width = width
     canvas.height = height
 
-    const scaleX = width / data.viewportWidth
-    const scaleY = height / data.viewportHeight
+    const scaleX = width / resolved.viewportWidth
 
-    const points = data.points
+    const points = resolved.points
       .filter((p) => (showFixations ? p.value > 1 : true))
       .map((p) => ({
-        x: Math.round(p.nx * data.viewportWidth * scaleX),
-        y: Math.round(p.ny * data.viewportHeight * scaleY),
+        x: Math.round(p.nx * width),
+        y: Math.round(p.ny * height),
         value: p.value,
       }))
 
     const maxVal = points.reduce((max, p) => Math.max(max, p.value), 1)
-    renderHeatmap(canvas, points, maxVal, blurRadius, opacity)
-  }, [data, opacity, blurRadius, showFixations])
+    // blurRadius is defined in viewport px — scale it with the points so the
+    // apparent hotspot size doesn't change with the dashboard container size
+    renderHeatmap(canvas, points, maxVal, blurRadius * scaleX, opacity)
+  }, [resolved, opacity, blurRadius, showFixations])
 
   useEffect(() => {
     paint()
@@ -128,29 +188,32 @@ export default function HeatmapCanvas({
     return () => observer.disconnect()
   }, [paint])
 
-  const screenshotUrl = screenshotUrlOverride !== undefined
-    ? screenshotUrlOverride
-    : data?.screenshotUrl ?? null
+  const displayScreenshotUrl =
+    screenshotUrlOverride !== undefined
+      ? screenshotUrlOverride
+      : resolved?.screenshotUrl ?? null
 
   return (
     <div className="card p-0 overflow-hidden">
       <div
         ref={containerRef}
         className="relative w-full bg-surface-800"
-        style={{ aspectRatio: data ? `${data.viewportWidth} / ${data.viewportHeight}` : '16 / 9' }}
+        style={{
+          aspectRatio: resolved
+            ? `${resolved.viewportWidth} / ${resolved.viewportHeight}`
+            : '16 / 9',
+        }}
       >
-        {screenshotUrl && (
+        {displayScreenshotUrl && (
           <img
-            src={screenshotUrl}
+            src={displayScreenshotUrl}
             alt="Page screenshot"
             className="absolute inset-0 w-full h-full object-contain"
           />
         )}
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full"
-        />
-        {!data && (
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+        {children}
+        {!resolved && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-surface-500">
             <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
@@ -158,17 +221,17 @@ export default function HeatmapCanvas({
             <span className="text-sm">No heatmap data available</span>
           </div>
         )}
-        {data && !screenshotUrl && (
+        {resolved && !displayScreenshotUrl && (
           <div className="absolute bottom-2 left-2 text-xs text-surface-600 bg-surface-900/60 px-2 py-1 rounded">
             No page screenshot available
           </div>
         )}
       </div>
-      {data && (
+      {resolved && (
         <div className="px-4 py-2 bg-surface-800/50 border-t border-surface-700 flex items-center gap-4 text-xs text-surface-400">
-          <span>Viewport: {data.viewportWidth} x {data.viewportHeight}</span>
-          <span>Points: {data.points.length}</span>
-          <span>Fixations: {data.totalFixations}</span>
+          <span>Viewport: {resolved.viewportWidth} x {resolved.viewportHeight}</span>
+          <span>Points: {resolved.pointCount}</span>
+          <span>Fixations: {resolved.totalFixations}</span>
         </div>
       )}
     </div>

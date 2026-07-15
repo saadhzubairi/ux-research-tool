@@ -15,7 +15,7 @@ export default function Layout({ children }: LayoutProps) {
       <Sidebar />
       <div
         className={`transition-all duration-200 ${
-          sidebarOpen ? 'ml-56' : 'ml-16'
+          sidebarOpen ? 'ml-[232px]' : 'ml-[92px]'
         }`}
       >
         <TopBar />

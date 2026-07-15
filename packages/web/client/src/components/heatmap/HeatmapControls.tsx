@@ -61,7 +61,7 @@ export default function HeatmapControls({
           max={100}
           value={opacity}
           onChange={(e) => onOpacityChange(Number(e.target.value))}
-          className="w-full accent-accent-500"
+          className="w-full accent-pink-500"
         />
       </div>
 
@@ -75,7 +75,7 @@ export default function HeatmapControls({
           max={100}
           value={blurRadius}
           onChange={(e) => onBlurRadiusChange(Number(e.target.value))}
-          className="w-full accent-accent-500"
+          className="w-full accent-pink-500"
         />
       </div>
 
@@ -83,12 +83,12 @@ export default function HeatmapControls({
         <label className="text-xs text-surface-400">Show Fixations Only</label>
         <button
           onClick={onToggleFixations}
-          className={`relative w-10 h-5 transition-colors ${
-            showFixations ? 'bg-accent-600' : 'bg-surface-600'
+          className={`relative w-10 h-5 rounded-full transition-colors ${
+            showFixations ? 'bg-pink-500' : 'bg-surface-600'
           }`}
         >
           <span
-            className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white transition-transform ${
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
               showFixations ? 'translate-x-5' : 'translate-x-0'
             }`}
           />

@@ -2,16 +2,20 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 
 interface CalibrationDotProps {
   position: { x: number; y: number }
-  onComplete: () => void
-  onRecordSample: (x: number, y: number) => void
+  /** accepted = enough good samples were captured for this point */
+  onComplete: (accepted: boolean) => void
+  /** Returns true when the sample passed quality filtering */
+  onRecordSample: (x: number, y: number) => boolean
   active: boolean
 }
 
 // Phase durations
-const SETTLE_MS = 2000       // Eyes find and fixate on the dot
-const SHRINK_MS = 1500       // Dot shrinks — guides gaze to precise center
-const RECORD_MS = 1500       // Hold at min size, auto-record samples
-const RECORD_INTERVAL_MS = 50 // ~30 samples per point
+const SETTLE_MS = 1500        // Eyes find and fixate on the dot (covers saccade latency)
+const SHRINK_MS = 1200        // Dot shrinks — guides gaze to precise center
+const RECORD_INTERVAL_MS = 40
+const TARGET_GOOD_SAMPLES = 25 // Stop recording early once we have these
+const MIN_GOOD_SAMPLES = 10    // Below this at timeout the point failed (blinks/face lost)
+const RECORD_TIMEOUT_MS = 3500 // Max time in the recording phase
 
 // Dot sizes
 const MAX_SIZE = 44
@@ -56,8 +60,9 @@ export function CalibrationDot({
 
   // Phase machine
   useEffect(() => {
-    if (!active || completedRef.current) return
+    if (!active) return
     cleanup()
+    completedRef.current = false
 
     setPhase('settling')
     setSize(MAX_SIZE)
@@ -101,29 +106,43 @@ export function CalibrationDot({
     }
   }, [phase])
 
-  // RECORDING phase — auto-record samples at the dot's center
+  // RECORDING phase — record until enough GOOD samples (or timeout).
+  // Blinks / face-lost frames are rejected by the hook, so the counter only
+  // advances on quality samples.
   useEffect(() => {
     if (phase !== 'recording') return
 
     const centerX = position.x * window.innerWidth
     const centerY = position.y * window.innerHeight
 
-    let count = 0
-    recordIntervalRef.current = setInterval(() => {
-      onRecordSampleRef.current(centerX, centerY)
-      count++
-      setSamplesRecorded(count)
-    }, RECORD_INTERVAL_MS)
+    let goodCount = 0
 
-    phaseTimerRef.current = setTimeout(() => {
+    const finish = (accepted: boolean): void => {
+      if (completedRef.current) return
+      completedRef.current = true
       if (recordIntervalRef.current !== null) {
         clearInterval(recordIntervalRef.current)
         recordIntervalRef.current = null
       }
-      completedRef.current = true
+      if (phaseTimerRef.current !== null) {
+        clearTimeout(phaseTimerRef.current)
+        phaseTimerRef.current = null
+      }
       setPhase('done')
-      setTimeout(() => onCompleteRef.current(), 250)
-    }, RECORD_MS)
+      setTimeout(() => onCompleteRef.current(accepted), 250)
+    }
+
+    recordIntervalRef.current = setInterval(() => {
+      if (onRecordSampleRef.current(centerX, centerY)) {
+        goodCount++
+        setSamplesRecorded(goodCount)
+        if (goodCount >= TARGET_GOOD_SAMPLES) finish(true)
+      }
+    }, RECORD_INTERVAL_MS)
+
+    phaseTimerRef.current = setTimeout(() => {
+      finish(goodCount >= MIN_GOOD_SAMPLES)
+    }, RECORD_TIMEOUT_MS)
 
     return () => {
       if (recordIntervalRef.current !== null) clearInterval(recordIntervalRef.current)

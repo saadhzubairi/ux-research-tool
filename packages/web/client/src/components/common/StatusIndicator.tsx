@@ -4,13 +4,13 @@ interface StatusIndicatorProps {
 }
 
 const colorMap = {
-  connected: 'bg-green-400',
-  degraded: 'bg-yellow-400',
+  connected: 'bg-emerald-500',
+  degraded: 'bg-amber-400',
   disconnected: 'bg-red-400',
 } as const
 
 const pulseMap = {
-  connected: 'bg-green-400/50',
+  connected: 'bg-emerald-500/50',
   degraded: 'bg-yellow-400/50',
   disconnected: '',
 } as const

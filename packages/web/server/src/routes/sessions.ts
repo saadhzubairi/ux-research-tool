@@ -1,12 +1,17 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import type { ApiResponse, SessionsQuery, ReplayData, ElementAttention, CalibrationResult } from '@gazekit/shared'
+import type { ApiResponse, ElementAttention } from '@gazekit/shared'
 import { Session } from '../models/Session'
+import { Page } from '../models/Page'
+import { Slice } from '../models/Slice'
 import { GazeEvent } from '../models/GazeEvent'
 import { RrwebEvent } from '../models/RrwebEvent'
 import { Screenshot } from '../models/Screenshot'
 import { validateQuery } from '../middleware/validation'
+import { config } from '../config/env'
+import { filePathToUrl } from '../services/screenshotStore'
 import fs from 'fs/promises'
+import path from 'path'
 
 export const sessionsRouter = Router()
 
@@ -20,82 +25,72 @@ const sessionsQuerySchema = z.object({
 })
 
 // GET /api/sessions — list sessions with pagination and filtering
-sessionsRouter.get(
-  '/',
-  validateQuery(sessionsQuerySchema),
-  async (req, res, next) => {
-    try {
-      const query = req.query as unknown as z.infer<typeof sessionsQuerySchema>
-      const page = query.page ?? 1
-      const limit = query.limit ?? 20
-      const skip = (page - 1) * limit
+sessionsRouter.get('/', validateQuery(sessionsQuerySchema), async (req, res, next) => {
+  try {
+    const query = req.query as unknown as z.infer<typeof sessionsQuerySchema>
+    const page = query.page ?? 1
+    const limit = query.limit ?? 20
+    const skip = (page - 1) * limit
 
-      const filter: Record<string, unknown> = {}
+    const filter: Record<string, unknown> = {}
 
-      if (query.url) {
-        filter['pages.url'] = query.url
-      }
-      if (query.userId) {
-        filter.userId = query.userId
-      }
-      if (query.from || query.to) {
-        const dateFilter: Record<string, Date> = {}
-        if (query.from) dateFilter.$gte = new Date(query.from)
-        if (query.to) dateFilter.$lte = new Date(query.to)
-        filter.startedAt = dateFilter
-      }
-
-      const [sessions, total] = await Promise.all([
-        Session.find(filter)
-          .sort({ startedAt: -1 })
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Session.countDocuments(filter),
-      ])
-
-      const response: ApiResponse<{
-        sessions: typeof sessions
-        total: number
-        page: number
-        limit: number
-        totalPages: number
-      }> = {
-        success: true,
-        data: {
-          sessions,
-          total,
-          page,
-          limit,
-          totalPages: Math.ceil(total / limit),
-        },
-      }
-
-      res.json(response)
-    } catch (err) {
-      next(err)
+    if (query.url) {
+      // v2 sessions have Page docs; v1 sessions have the legacy embedded
+      // pages.url. Match either.
+      const pageSessionIds = await Page.find({ url: query.url })
+        .distinct('sessionId')
+      filter.$or = [
+        { sessionId: { $in: pageSessionIds } },
+        { 'pages.url': query.url },
+      ]
     }
+    if (query.userId) {
+      filter.userId = query.userId
+    }
+    if (query.from || query.to) {
+      const dateFilter: Record<string, Date> = {}
+      if (query.from) dateFilter.$gte = new Date(query.from)
+      if (query.to) dateFilter.$lte = new Date(query.to)
+      filter.startedAt = dateFilter
+    }
+
+    const [sessions, total] = await Promise.all([
+      Session.find(filter).sort({ startedAt: -1 }).skip(skip).limit(limit).lean(),
+      Session.countDocuments(filter),
+    ])
+
+    const response: ApiResponse<{
+      sessions: typeof sessions
+      total: number
+      page: number
+      limit: number
+      totalPages: number
+    }> = {
+      success: true,
+      data: {
+        sessions,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    }
+
+    res.json(response)
+  } catch (err) {
+    next(err)
   }
-)
+})
 
 // GET /api/sessions/:id — get full session by sessionId
 sessionsRouter.get('/:id', async (req, res, next) => {
   try {
     const session = await Session.findOne({ sessionId: req.params.id }).lean()
-
     if (!session) {
-      res.status(404).json({
-        success: false,
-        error: 'Session not found',
-      })
+      res.status(404).json({ success: false, error: 'Session not found' })
       return
     }
-
-    const response: ApiResponse<typeof session> = {
-      success: true,
-      data: session,
-    }
-
+    const response: ApiResponse<typeof session> = { success: true, data: session }
     res.json(response)
   } catch (err) {
     next(err)
@@ -107,184 +102,120 @@ sessionsRouter.delete('/:id', async (req, res, next) => {
   try {
     const sessionId = req.params.id
     const session = await Session.findOne({ sessionId }).lean()
-
     if (!session) {
-      res.status(404).json({
-        success: false,
-        error: 'Session not found',
-      })
+      res.status(404).json({ success: false, error: 'Session not found' })
       return
     }
 
-    const screenshots = await Screenshot.find({ sessionId }).lean()
-    for (const screenshot of screenshots) {
-      if (screenshot.filePath) {
-        try {
-          await fs.unlink(screenshot.filePath)
-        } catch {
-          // File may already be deleted
-        }
-      }
-    }
-
-    // Collect all parent directories from file paths, sorted deepest-first
-    // so visit-folder dirs are removed before session dirs
-    const allDirs = new Set(
-      screenshots
-        .filter(s => s.filePath)
-        .flatMap(s => {
-          const parts = s.filePath!.split('/')
-          parts.pop() // remove filename → visit folder or session dir
-          const visitDir = parts.join('/')
-          const sessionDir = parts.slice(0, -1).join('/')
-          return [visitDir, sessionDir]
-        })
-    )
-    const sortedDirs = [...allDirs].sort((a, b) => b.length - a.length)
-    for (const dir of sortedDirs) {
-      try {
-        await fs.rmdir(dir)
-      } catch {
-        // Directory may not be empty or may not exist
-      }
-    }
+    // On-disk screenshots live under screenshots/{sessionId}/... for both the
+    // v2 (pageId/sliceIndex.png) and v1 (visitFolder/index.png) layouts, so
+    // removing the session directory tree covers both. Mongo TTL only deletes
+    // docs, never the referenced PNGs — this is the same manual-unlink gap the
+    // cleanup job also has to cover.
+    const sessionDir = path.join(config.dataDir, 'screenshots', sessionId)
+    await fs.rm(sessionDir, { recursive: true, force: true }).catch(() => {})
 
     await Promise.all([
       Session.deleteOne({ sessionId }),
+      // v2 collections
+      Page.deleteMany({ sessionId }),
+      Slice.deleteMany({ sessionId }),
+      // v1 collections (harmless no-ops for v2 sessions)
       GazeEvent.deleteMany({ 'meta.sid': sessionId }),
       RrwebEvent.deleteMany({ sessionId }),
       Screenshot.deleteMany({ sessionId }),
     ])
 
-    res.json({
-      success: true,
-      data: { deleted: sessionId },
-    })
+    res.json({ success: true, data: { deleted: sessionId } })
   } catch (err) {
     next(err)
   }
 })
 
-// GET /api/sessions/:id/replay — return replay data
-sessionsRouter.get('/:id/replay', async (req, res, next) => {
+// GET /api/sessions/:id/elements — element attention ranking.
+// v2 reads precomputed Slice.fixations; v1 falls back to the old inline
+// gaze-gap grouping over GazeEvent.
+sessionsRouter.get('/:id/elements', async (req, res, next) => {
   try {
     const sessionId = req.params.id
     const session = await Session.findOne({ sessionId }).lean()
-
     if (!session) {
-      res.status(404).json({
-        success: false,
-        error: 'Session not found',
-      })
+      res.status(404).json({ success: false, error: 'Session not found' })
       return
     }
 
-    const [rrwebBatches, gazeEvents] = await Promise.all([
-      RrwebEvent.find({ sessionId })
-        .sort({ batchIndex: 1 })
-        .lean(),
-      GazeEvent.find({ 'meta.sid': sessionId })
-        .sort({ ts: 1 })
-        .select({ ts: 1, x: 1, y: 1, conf: 1 })
-        .lean(),
-    ])
+    const elements =
+      session.schemaVersion === 2
+        ? await elementsFromSlices(sessionId)
+        : await elementsFromGazeEvents(sessionId)
 
-    const rrwebEvents = rrwebBatches.flatMap(batch => {
-      if (Array.isArray(batch.events)) return batch.events as unknown[]
-      return []
-    })
-
-    const gazeTimeline = gazeEvents.map(e => ({
-      ts: e.ts ? new Date(e.ts).getTime() : 0,
-      x: e.x ?? 0,
-      y: e.y ?? 0,
-      conf: e.conf ?? null,
-    }))
-
-    const replayData: ReplayData = {
-      session: {
-        sessionId: session.sessionId,
-        userId: session.userId ?? 'anonymous',
-        startedAt: session.startedAt.toISOString(),
-        endedAt: session.endedAt ? session.endedAt.toISOString() : null,
-        durationMs: session.durationMs ?? null,
-        device: {
-          userAgent: session.device?.userAgent ?? '',
-          screenWidth: session.device?.screenWidth ?? 0,
-          screenHeight: session.device?.screenHeight ?? 0,
-          dpr: session.device?.dpr ?? 1,
-        },
-        webcam: {
-          label: session.webcam?.label ?? '',
-          resolution: {
-            w: session.webcam?.resolution?.w ?? 0,
-            h: session.webcam?.resolution?.h ?? 0,
-          },
-        },
-        calibration: {
-          method: (session.calibration?.method as CalibrationResult['method']) ?? '9-point',
-          avgErrorPx: session.calibration?.avgErrorPx ?? 0,
-          precisionPx: session.calibration?.precisionPx ?? 0,
-          qualityScore: session.calibration?.qualityScore ?? 0,
-          screenWidth: session.calibration?.screenWidth ?? 0,
-          screenHeight: session.calibration?.screenHeight ?? 0,
-          dpr: session.calibration?.dpr ?? 1,
-          calibratedAt: session.calibration?.calibratedAt
-            ? new Date(session.calibration.calibratedAt).toISOString()
-            : new Date().toISOString(),
-        },
-        tracking: {
-          library: 'webgazer',
-          version: session.tracking?.version ?? '',
-          regressionModel: 'ridge',
-          avgFps: session.tracking?.avgFps ?? 0,
-        },
-        pages: (session.pages ?? []).map(p => ({
-          url: p.url ?? '',
-          enteredAt: p.enteredAt ? new Date(p.enteredAt).toISOString() : '',
-          leftAt: p.leftAt ? new Date(p.leftAt).toISOString() : null,
-        })),
-        stats: {
-          totalGazePoints: session.stats?.totalGazePoints ?? 0,
-          trackingLossSeconds: session.stats?.trackingLossSeconds ?? 0,
-          avgConfidence: session.stats?.avgConfidence ?? 0,
-        },
-      },
-      rrwebEvents,
-      gazeTimeline,
-    }
-
-    const response: ApiResponse<ReplayData> = {
-      success: true,
-      data: replayData,
-    }
-
+    const response: ApiResponse<ElementAttention[]> = { success: true, data: elements }
     res.json(response)
   } catch (err) {
     next(err)
   }
 })
 
-// GET /api/sessions/:id/elements — element attention ranking
-sessionsRouter.get('/:id/elements', async (req, res, next) => {
-  try {
-    const sessionId = req.params.id
-    const session = await Session.findOne({ sessionId }).lean()
+// v2: aggregate precomputed fixations by element selector.
+async function elementsFromSlices(sessionId: string): Promise<ElementAttention[]> {
+  const slices = await Slice.find({ sessionId }).select({ fixations: 1 }).lean()
 
-    if (!session) {
-      res.status(404).json({
-        success: false,
-        error: 'Session not found',
-      })
-      return
+  const map = new Map<
+    string,
+    { selector: string; tag: string; text: string; totalDwellMs: number; fixationCount: number; firstFixationTs: number }
+  >()
+
+  for (const slice of slices) {
+    for (const f of slice.fixations ?? []) {
+      const sel = f.el?.sel
+      if (!sel) continue
+      const ts = f.startTs ? new Date(f.startTs).getTime() : 0
+      const existing = map.get(sel)
+      if (!existing) {
+        map.set(sel, {
+          selector: sel,
+          tag: f.el?.tag ?? '',
+          text: (f.el?.txt ?? '').substring(0, 100),
+          totalDwellMs: f.durationMs ?? 0,
+          fixationCount: 1,
+          firstFixationTs: ts,
+        })
+      } else {
+        existing.totalDwellMs += f.durationMs ?? 0
+        existing.fixationCount += 1
+        if (ts < existing.firstFixationTs) existing.firstFixationTs = ts
+      }
     }
+  }
 
-    const gazeEvents = await GazeEvent.find({
-      'meta.sid': sessionId,
-      'el.sel': { $exists: true, $ne: null },
-    }).sort({ ts: 1 }).lean()
+  const grandTotal = [...map.values()].reduce((sum, d) => sum + d.totalDwellMs, 0)
+  return [...map.values()]
+    .map((d) => ({
+      selector: d.selector,
+      tag: d.tag,
+      text: d.text,
+      totalDwellMs: d.totalDwellMs,
+      fixationCount: d.fixationCount,
+      avgFixationMs: d.fixationCount > 0 ? Math.round(d.totalDwellMs / d.fixationCount) : 0,
+      firstFixationTs: d.firstFixationTs,
+      percentOfTotalDwell:
+        grandTotal > 0 ? Math.round((d.totalDwellMs / grandTotal) * 10000) / 100 : 0,
+    }))
+    .sort((a, b) => b.totalDwellMs - a.totalDwellMs)
+}
 
-    const elementMap = new Map<string, {
+// v1: legacy inline 200ms-gap dwell grouping over raw GazeEvent docs.
+async function elementsFromGazeEvents(sessionId: string): Promise<ElementAttention[]> {
+  const gazeEvents = await GazeEvent.find({
+    'meta.sid': sessionId,
+    'el.sel': { $exists: true, $ne: null },
+  })
+    .sort({ ts: 1 })
+    .lean()
+
+  const elementMap = new Map<
+    string,
+    {
       selector: string
       tag: string
       text: string
@@ -292,100 +223,95 @@ sessionsRouter.get('/:id/elements', async (req, res, next) => {
       fixationCount: number
       firstFixationTs: number
       dwellPeriods: Array<{ start: number; end: number }>
-    }>()
+    }
+  >()
 
-    const FIXATION_GAP_MS = 200
+  const FIXATION_GAP_MS = 200
 
-    for (const event of gazeEvents) {
-      if (!event.el?.sel) continue
-
-      const selector = event.el.sel
-      const eventTs = event.ts ? new Date(event.ts).getTime() : 0
-
-      const existing = elementMap.get(selector)
-      if (!existing) {
-        elementMap.set(selector, {
-          selector,
-          tag: event.el.tag ?? '',
-          text: (event.el.txt ?? '').substring(0, 100),
-          totalDwellMs: 0,
-          fixationCount: 1,
-          firstFixationTs: eventTs,
-          dwellPeriods: [{ start: eventTs, end: eventTs }],
-        })
+  for (const event of gazeEvents) {
+    if (!event.el?.sel) continue
+    const selector = event.el.sel
+    const eventTs = event.ts ? new Date(event.ts).getTime() : 0
+    const existing = elementMap.get(selector)
+    if (!existing) {
+      elementMap.set(selector, {
+        selector,
+        tag: event.el.tag ?? '',
+        text: (event.el.txt ?? '').substring(0, 100),
+        totalDwellMs: 0,
+        fixationCount: 1,
+        firstFixationTs: eventTs,
+        dwellPeriods: [{ start: eventTs, end: eventTs }],
+      })
+    } else {
+      const lastPeriod = existing.dwellPeriods[existing.dwellPeriods.length - 1]
+      if (lastPeriod && eventTs - lastPeriod.end < FIXATION_GAP_MS) {
+        lastPeriod.end = eventTs
       } else {
-        const lastPeriod = existing.dwellPeriods[existing.dwellPeriods.length - 1]
-        if (lastPeriod && eventTs - lastPeriod.end < FIXATION_GAP_MS) {
-          lastPeriod.end = eventTs
-        } else {
-          existing.dwellPeriods.push({ start: eventTs, end: eventTs })
-          existing.fixationCount++
-        }
+        existing.dwellPeriods.push({ start: eventTs, end: eventTs })
+        existing.fixationCount++
       }
     }
+  }
 
-    let grandTotalDwell = 0
-    for (const [, data] of elementMap) {
-      data.totalDwellMs = data.dwellPeriods.reduce(
-        (sum, p) => sum + (p.end - p.start),
-        0
-      )
-      grandTotalDwell += data.totalDwellMs
-    }
+  let grandTotalDwell = 0
+  for (const [, data] of elementMap) {
+    data.totalDwellMs = data.dwellPeriods.reduce((sum, p) => sum + (p.end - p.start), 0)
+    grandTotalDwell += data.totalDwellMs
+  }
 
-    const elements: ElementAttention[] = Array.from(elementMap.values())
-      .map(data => ({
-        selector: data.selector,
-        tag: data.tag,
-        text: data.text,
-        totalDwellMs: data.totalDwellMs,
-        fixationCount: data.fixationCount,
-        avgFixationMs: data.fixationCount > 0
-          ? Math.round(data.totalDwellMs / data.fixationCount)
-          : 0,
-        firstFixationTs: data.firstFixationTs,
-        percentOfTotalDwell: grandTotalDwell > 0
+  return Array.from(elementMap.values())
+    .map((data) => ({
+      selector: data.selector,
+      tag: data.tag,
+      text: data.text,
+      totalDwellMs: data.totalDwellMs,
+      fixationCount: data.fixationCount,
+      avgFixationMs:
+        data.fixationCount > 0 ? Math.round(data.totalDwellMs / data.fixationCount) : 0,
+      firstFixationTs: data.firstFixationTs,
+      percentOfTotalDwell:
+        grandTotalDwell > 0
           ? Math.round((data.totalDwellMs / grandTotalDwell) * 10000) / 100
           : 0,
-      }))
-      .sort((a, b) => b.totalDwellMs - a.totalDwellMs)
+    }))
+    .sort((a, b) => b.totalDwellMs - a.totalDwellMs)
+}
 
-    const response: ApiResponse<ElementAttention[]> = {
-      success: true,
-      data: elements,
-    }
-
-    res.json(response)
-  } catch (err) {
-    next(err)
-  }
-})
-
-// GET /api/sessions/:id/screenshots — list screenshots for session
+// GET /api/sessions/:id/screenshots — list screenshots for a session.
+// v2 sources from Slice; v1 from the legacy Screenshot collection.
 sessionsRouter.get('/:id/screenshots', async (req, res, next) => {
   try {
     const sessionId = req.params.id
     const session = await Session.findOne({ sessionId }).lean()
-
     if (!session) {
-      res.status(404).json({
-        success: false,
-        error: 'Session not found',
-      })
+      res.status(404).json({ success: false, error: 'Session not found' })
+      return
+    }
+
+    if (session.schemaVersion === 2) {
+      const slices = await Slice.find({ sessionId })
+        .sort({ capturedAt: 1 })
+        .select({ sliceIndex: 1, pageId: 1, capturedAt: 1, screenshot: 1 })
+        .lean()
+      const data = slices.map((s) => ({
+        index: s.sliceIndex ?? 0,
+        pageId: String(s.pageId),
+        scrollY: s.screenshot?.scrollY ?? 0,
+        viewportHeight: s.screenshot?.viewportHeight ?? 0,
+        capturedAt: s.capturedAt,
+        screenshotUrl: filePathToUrl(s.screenshot?.filePath),
+      }))
+      res.json({ success: true, data })
       return
     }
 
     const filter: Record<string, unknown> = { sessionId }
     const urlParam = req.query.url as string | undefined
-    if (urlParam) {
-      filter.url = urlParam
-    }
+    if (urlParam) filter.url = urlParam
 
-    const screenshots = await Screenshot.find(filter)
-      .sort({ capturedAt: 1 })
-      .lean()
-
-    const screenshotData = screenshots.map((s, i) => {
+    const screenshots = await Screenshot.find(filter).sort({ capturedAt: 1 }).lean()
+    const data = screenshots.map((s, i) => {
       let screenshotUrl: string | null = null
       if (s.filename && s.visitFolder) {
         screenshotUrl = `/api/screenshots/${sessionId}/${s.visitFolder}/${s.filename}`
@@ -394,7 +320,6 @@ sessionsRouter.get('/:id/screenshots', async (req, res, next) => {
       } else if (s.filePath) {
         screenshotUrl = `/api/screenshots/${s.filePath.split('/').pop()}`
       }
-
       return {
         index: s.index ?? i,
         visitIndex: s.visitIndex,
@@ -407,12 +332,7 @@ sessionsRouter.get('/:id/screenshots', async (req, res, next) => {
       }
     })
 
-    const response: ApiResponse<typeof screenshotData> = {
-      success: true,
-      data: screenshotData,
-    }
-
-    res.json(response)
+    res.json({ success: true, data })
   } catch (err) {
     next(err)
   }

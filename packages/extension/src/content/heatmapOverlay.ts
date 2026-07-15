@@ -49,16 +49,18 @@ const gradientLUT = new Uint8ClampedArray(256 * 4)
     // Find surrounding stops
     let lo = 0
     for (let s = 1; s < stops.length; s++) {
-      if (stops[s][0] >= t) { lo = s - 1; break }
+      if ((stops[s] as number[])[0]! >= t) { lo = s - 1; break }
     }
     const hi = Math.min(lo + 1, stops.length - 1)
-    const range = stops[hi][0] - stops[lo][0]
-    const frac = range > 0 ? (t - stops[lo][0]) / range : 0
+    const sLo = stops[lo] as number[]
+    const sHi = stops[hi] as number[]
+    const range = sHi[0]! - sLo[0]!
+    const frac = range > 0 ? (t - sLo[0]!) / range : 0
 
-    gradientLUT[i * 4 + 0] = Math.round(stops[lo][1] + (stops[hi][1] - stops[lo][1]) * frac)
-    gradientLUT[i * 4 + 1] = Math.round(stops[lo][2] + (stops[hi][2] - stops[lo][2]) * frac)
-    gradientLUT[i * 4 + 2] = Math.round(stops[lo][3] + (stops[hi][3] - stops[lo][3]) * frac)
-    gradientLUT[i * 4 + 3] = Math.round(stops[lo][4] + (stops[hi][4] - stops[lo][4]) * frac)
+    gradientLUT[i * 4 + 0] = Math.round(sLo[1]! + (sHi[1]! - sLo[1]!) * frac)
+    gradientLUT[i * 4 + 1] = Math.round(sLo[2]! + (sHi[2]! - sLo[2]!) * frac)
+    gradientLUT[i * 4 + 2] = Math.round(sLo[3]! + (sHi[3]! - sLo[3]!) * frac)
+    gradientLUT[i * 4 + 3] = Math.round(sLo[4]! + (sHi[4]! - sLo[4]!) * frac)
   }
 })()
 
@@ -109,8 +111,9 @@ class HeatmapOverlayImpl {
       for (let dx = -KERNEL_RADIUS; dx <= KERNEL_RADIUS; dx++) {
         const col = gx + dx
         if (col < 0 || col >= this.gridW) continue
-        const weight = kernel[(dy + KERNEL_RADIUS) * kernelSize + (dx + KERNEL_RADIUS)]
-        this.grid[row * this.gridW + col] += weight
+        const weight = kernel[(dy + KERNEL_RADIUS) * kernelSize + (dx + KERNEL_RADIUS)]!
+        const cell = row * this.gridW + col
+        this.grid[cell] = (this.grid[cell] as number) + weight
       }
     }
 
@@ -160,15 +163,21 @@ class HeatmapOverlayImpl {
     this.canvas.height = h * dpr
     this.ctx.scale(dpr, dpr)
 
-    this.gridW = Math.ceil(w / SCALE)
-    this.gridH = Math.ceil(h / SCALE)
+    const newGridW = Math.ceil(w / SCALE)
+    const newGridH = Math.ceil(h / SCALE)
 
-    // Preserve existing data if possible, otherwise allocate fresh
-    const newGrid = new Float32Array(this.gridW * this.gridH)
+    // Copy row-by-row: a flat copy after a width change shears all
+    // accumulated heat diagonally
+    const newGrid = new Float32Array(newGridW * newGridH)
     if (this.grid) {
-      const copyLen = Math.min(this.grid.length, newGrid.length)
-      newGrid.set(this.grid.subarray(0, copyLen))
+      const copyW = Math.min(this.gridW, newGridW)
+      const copyH = Math.min(this.gridH, newGridH)
+      for (let row = 0; row < copyH; row++) {
+        newGrid.set(this.grid.subarray(row * this.gridW, row * this.gridW + copyW), row * newGridW)
+      }
     }
+    this.gridW = newGridW
+    this.gridH = newGridH
     this.grid = newGrid
     this.dirty = true
   }
@@ -193,7 +202,8 @@ class HeatmapOverlayImpl {
     // Find max for normalization
     let maxVal = 0
     for (let i = 0; i < this.grid.length; i++) {
-      if (this.grid[i] > maxVal) maxVal = this.grid[i]
+      const v = this.grid[i] as number
+      if (v > maxVal) maxVal = v
     }
     if (maxVal === 0) return
 
@@ -202,14 +212,14 @@ class HeatmapOverlayImpl {
     const pixels = imgData.data
 
     for (let i = 0; i < this.grid.length; i++) {
-      const normalized = this.grid[i] / maxVal
+      const normalized = (this.grid[i] as number) / maxVal
       const lutIndex = Math.min(255, Math.round(normalized * 255))
       const pi = i * 4
       const li = lutIndex * 4
-      pixels[pi] = gradientLUT[li]
-      pixels[pi + 1] = gradientLUT[li + 1]
-      pixels[pi + 2] = gradientLUT[li + 2]
-      pixels[pi + 3] = gradientLUT[li + 3]
+      pixels[pi] = gradientLUT[li] as number
+      pixels[pi + 1] = gradientLUT[li + 1] as number
+      pixels[pi + 2] = gradientLUT[li + 2] as number
+      pixels[pi + 3] = gradientLUT[li + 3] as number
     }
 
     // Clear and draw scaled up

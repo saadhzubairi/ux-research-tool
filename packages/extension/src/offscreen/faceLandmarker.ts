@@ -1,8 +1,13 @@
 // packages/extension/src/offscreen/faceLandmarker.ts
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-import { extractIrisData, normalizeIrisPosition, type IrisData } from './iris'
+import {
+  extractFrameFeatures,
+  LANDMARK_COUNT_REQUIRED,
+  type FrameFeatures,
+} from './features'
 
 let faceLandmarker: FaceLandmarker | null = null
+let lastVideoTimestampMs = -1
 
 /** Initialize the MediaPipe FaceLandmarker with WASM from local extension files. */
 export async function initFaceLandmarker(
@@ -17,46 +22,54 @@ export async function initFaceLandmarker(
     },
     runningMode: 'VIDEO',
     numFaces: 1,
-    outputFaceBlendshapes: false,
+    // The eyeLook* blendshapes are a learned, roughly head-normalized
+    // re-encoding of eye rotation — auxiliary features for the regression
+    outputFaceBlendshapes: true,
     outputFacialTransformationMatrixes: false,
   })
+  lastVideoTimestampMs = -1
 }
 
-export interface GazePredictionRaw {
+export interface GazeFrameResult {
   faceDetected: boolean
-  irisData: IrisData | null
-  normalizedIris: { x: number; y: number } | null
+  frame: FrameFeatures | null
 }
 
-/** Run face landmark detection on a video frame and extract iris data. */
-export function detectGaze(
+const NO_FACE: GazeFrameResult = { faceDetected: false, frame: null }
+
+/** Run face landmark detection on a video frame and extract gaze features. */
+export function detectGazeFrame(
   video: HTMLVideoElement,
   timestampMs: number,
-): GazePredictionRaw {
-  if (!faceLandmarker) {
-    return { faceDetected: false, irisData: null, normalizedIris: null }
-  }
+): GazeFrameResult {
+  if (!faceLandmarker) return NO_FACE
 
-  const result = faceLandmarker.detectForVideo(video, timestampMs)
+  // detectForVideo requires strictly increasing timestamps
+  const ts = timestampMs <= lastVideoTimestampMs ? lastVideoTimestampMs + 1 : timestampMs
+  lastVideoTimestampMs = ts
 
-  if (!result.faceLandmarks || result.faceLandmarks.length === 0) {
-    return { faceDetected: false, irisData: null, normalizedIris: null }
-  }
+  const result = faceLandmarker.detectForVideo(video, ts)
+
+  if (!result.faceLandmarks || result.faceLandmarks.length === 0) return NO_FACE
 
   const landmarks = result.faceLandmarks[0]
-  if (landmarks.length < 478) {
-    // No iris landmarks available
-    return { faceDetected: true, irisData: null, normalizedIris: null }
+  if (!landmarks || landmarks.length < LANDMARK_COUNT_REQUIRED) {
+    return { faceDetected: true, frame: null }
   }
 
-  const irisData = extractIrisData(landmarks)
-  const normalizedIris = normalizeIrisPosition(irisData)
+  const blendshapes = new Map<string, number>()
+  const categories = result.faceBlendshapes?.[0]?.categories
+  if (categories) {
+    for (const c of categories) blendshapes.set(c.categoryName, c.score)
+  }
 
-  return { faceDetected: true, irisData, normalizedIris }
+  const frame = extractFrameFeatures(landmarks, blendshapes)
+  return { faceDetected: true, frame }
 }
 
 /** Clean up MediaPipe resources. */
 export function closeFaceLandmarker(): void {
   faceLandmarker?.close()
   faceLandmarker = null
+  lastVideoTimestampMs = -1
 }

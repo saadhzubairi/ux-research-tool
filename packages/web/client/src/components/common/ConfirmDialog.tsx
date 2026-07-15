@@ -47,7 +47,7 @@ export default function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-accent-900/40 backdrop-blur-sm"
         onClick={onCancel}
       />
       <div
@@ -56,10 +56,10 @@ export default function ConfirmDialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="relative bg-surface-800 border border-surface-600 rounded-lg shadow-2xl max-w-md w-full mx-4 p-6 focus:outline-none"
+        className="relative bg-surface-900 border-2 border-accent-100 rounded-3xl shadow-sticker-lg max-w-md w-full mx-4 p-6 focus:outline-none"
       >
-        <h3 className="text-lg font-semibold text-surface-100 mb-2">{title}</h3>
-        <p className="text-sm text-surface-400 mb-6">{message}</p>
+        <h3 className="text-lg font-bold text-surface-100 mb-2">{title}</h3>
+        <p className="text-sm font-semibold text-surface-400 mb-6">{message}</p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} className="btn-secondary">
             {cancelLabel}

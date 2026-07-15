@@ -8,60 +8,68 @@
     --color-gaze-trail: rgba(239, 68, 68, 0.2);
   }
 
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display;
+  }
+
   * {
     scrollbar-width: thin;
-    scrollbar-color: #2a2a2a #000000;
+    scrollbar-color: #d5d9ee transparent;
   }
 
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
 
   *::-webkit-scrollbar-track {
-    background: #000000;
+    background: transparent;
   }
 
   *::-webkit-scrollbar-thumb {
-    background: #2a2a2a;
+    background: #d5d9ee;
+    border-radius: 9999px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: #3a3a3a;
+    background: #b9bfe0;
   }
 }
 
 @layer components {
   .card {
-    @apply bg-surface-900 border border-surface-700 p-4;
+    @apply bg-surface-900 border-2 border-accent-100 rounded-3xl shadow-sticker p-4;
   }
 
   .card-header {
-    @apply text-sm font-medium text-surface-400 uppercase tracking-wider mb-2;
+    @apply text-xs font-extrabold text-pink-500 uppercase tracking-widest mb-2;
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-surface-900 disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-bold rounded-full transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-accent-300 focus:ring-offset-2 focus:ring-offset-surface-950 disabled:opacity-50 disabled:pointer-events-none;
   }
 
   .btn-primary {
-    @apply btn bg-accent-600 text-white hover:bg-accent-700;
+    @apply btn bg-pink-500 text-white shadow-sticker-pink hover:bg-pink-400 hover:-translate-y-0.5 active:translate-y-0 active:shadow-none;
   }
 
   .btn-secondary {
-    @apply btn bg-surface-700 text-surface-200 hover:bg-surface-600;
+    @apply btn bg-accent-100 text-accent-700 hover:bg-accent-200 hover:-translate-y-0.5 active:translate-y-0;
   }
 
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700;
+    @apply btn bg-red-500 text-white shadow-[0_3px_0_0_rgba(185,28,28,0.5)] hover:bg-red-400 hover:-translate-y-0.5 active:translate-y-0 active:shadow-none;
   }
 
   .btn-ghost {
-    @apply btn text-surface-400 hover:text-surface-200 hover:bg-surface-800;
+    @apply btn text-surface-400 hover:text-accent-600 hover:bg-accent-50;
   }
 
   .input {
-    @apply w-full bg-surface-800 border border-surface-600 px-3 py-2 text-sm text-surface-100 placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent;
+    @apply w-full bg-white border-2 border-accent-100 rounded-2xl px-3.5 py-2 text-sm font-semibold text-surface-100 placeholder-surface-500 focus:outline-none focus:border-accent-300 focus:ring-0 transition-colors;
   }
 
   .select {
@@ -69,34 +77,38 @@
   }
 
   .table-row {
-    @apply border-b border-surface-800 hover:bg-surface-800/50 transition-colors;
+    @apply border-b-2 border-surface-800 last:border-b-0 hover:bg-accent-50/70 transition-colors;
   }
 
   .tab {
-    @apply px-4 py-2 text-sm font-medium text-surface-400 border-b-2 border-transparent hover:text-surface-200 hover:border-surface-600 transition-colors;
+    @apply px-4 py-1.5 text-sm font-bold rounded-full text-surface-400 hover:text-accent-600 hover:bg-accent-50 transition-colors;
   }
 
   .tab-active {
-    @apply tab text-accent-400 border-accent-500;
+    @apply px-4 py-1.5 text-sm font-bold rounded-full bg-accent-600 text-white shadow-sticker-blue;
   }
 
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-0.5 text-xs font-bold rounded-full;
   }
 
   .badge-success {
-    @apply badge bg-green-900/50 text-green-400;
+    @apply badge bg-emerald-100 text-emerald-700;
   }
 
   .badge-warning {
-    @apply badge bg-yellow-900/50 text-yellow-400;
+    @apply badge bg-amber-100 text-amber-700;
   }
 
   .badge-danger {
-    @apply badge bg-red-900/50 text-red-400;
+    @apply badge bg-red-100 text-red-600;
   }
 
   .badge-info {
-    @apply badge bg-blue-900/50 text-blue-400;
+    @apply badge bg-accent-100 text-accent-700;
+  }
+
+  .checkbox {
+    @apply rounded-md border-2 border-accent-200 bg-white text-pink-500 focus:ring-pink-300 focus:ring-offset-0 transition-colors cursor-pointer;
   }
 }

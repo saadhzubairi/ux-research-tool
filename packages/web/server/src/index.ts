@@ -5,6 +5,7 @@ import { config } from './config/env'
 import { connectDatabase } from './config/database'
 import { createWsServer } from './ws/wsServer'
 import { sessionsRouter } from './routes/sessions'
+import { pagesRouter } from './routes/pages'
 import { heatmapRouter } from './routes/heatmap'
 import { screenshotsRouter } from './routes/screenshots'
 import { statusRouter } from './routes/status'
@@ -20,6 +21,7 @@ async function main() {
   app.use(express.json({ limit: '10mb' }))
   if (config.nodeEnv === 'development') app.use(morgan('dev'))
 
+  app.use('/api/sessions', pagesRouter)
   app.use('/api/sessions', sessionsRouter)
   app.use('/api/heatmap', heatmapRouter)
   app.use('/api/screenshots', screenshotsRouter)

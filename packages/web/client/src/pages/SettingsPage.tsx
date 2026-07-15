@@ -67,8 +67,8 @@ export default function SettingsPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-surface-100">Settings</h1>
-        <p className="text-sm text-surface-400 mt-1">
-          Server status and data management
+        <p className="text-sm font-semibold text-surface-400 mt-1">
+          Server status and data management ⚙️
         </p>
       </div>
 
@@ -151,7 +151,7 @@ export default function SettingsPage() {
                     return (
                       <div
                         key={session.sessionId}
-                        className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-surface-800"
+                        className="flex items-center justify-between py-1.5 px-2 rounded-xl hover:bg-accent-50"
                       >
                         <div className="text-xs text-surface-300 font-mono truncate flex-1 mr-2">
                           {displayUrl}
@@ -204,7 +204,7 @@ function StatusRow({ label, connected }: { label: string; connected: boolean }) 
       <span className="text-sm text-surface-300">{label}</span>
       <div className="flex items-center gap-2">
         <StatusIndicator status={connected ? 'connected' : 'disconnected'} />
-        <span className={`text-xs ${connected ? 'text-green-400' : 'text-red-400'}`}>
+        <span className={`text-xs font-bold ${connected ? 'text-emerald-600' : 'text-red-500'}`}>
           {connected ? 'Connected' : 'Disconnected'}
         </span>
       </div>

@@ -1,9 +1,17 @@
 import type {
-  GazeBatch,
   GazeSample,
   CalibrationResult,
   ExtensionMessage,
+  SlicePayload,
+  SliceTrigger,
 } from '@gazekit/shared'
+
+// A slice as produced by the content script: the full public SlicePayload
+// minus the screenshot, which the offscreen document fills in from the
+// tab-capture canvas right before sending over the WS.
+export type SliceCapture = Omit<SlicePayload, 'screenshotDataUrl'>
+
+export type { SliceTrigger }
 
 // ---------------------------------------------------------------------------
 // Extension settings stored in chrome.storage.local
@@ -56,10 +64,9 @@ export type PopupMessage =
 // ---------------------------------------------------------------------------
 
 export type ContentMessage =
-  | { type: 'gaze_batch'; payload: GazeBatch }
-  | { type: 'rrweb_events'; payload: { sessionId: string; events: unknown[] } }
+  | { type: 'slice'; payload: SliceCapture }
   | { type: 'tracking_status'; status: 'active' | 'paused' | 'error'; error?: string }
-  | { type: 'page_change'; url: string; heatmapDataUrl?: string }
+  | { type: 'gaze_click_anchor'; screenX: number; screenY: number; ts: number }
 
 // ---------------------------------------------------------------------------
 // Messages from offscreen to service worker
@@ -81,6 +88,10 @@ export type ServiceWorkerToContentMessage =
   | { type: 'pause_tracking' }
   | { type: 'resume_tracking' }
   | { type: 'gaze_samples'; samples: GazeSample[] }
+  | { type: 'zoom_update'; zoomFactor: number }
+  // Fired after a full-page navigation re-attaches tracking: the fresh content
+  // script emits one immediate slice with trigger 'navigation'.
+  | { type: 'navigation_slice' }
 
 // ---------------------------------------------------------------------------
 // Messages from service worker to offscreen
@@ -93,6 +104,13 @@ export type ServiceWorkerToOffscreenMessage =
   | { type: 'send'; message: ExtensionMessage }
   | { type: 'start_gaze' }
   | { type: 'stop_gaze' }
+  | { type: 'click_anchor'; screenX: number; screenY: number; ts: number }
+  // Tab-capture stream lifecycle + slice send (the offscreen doc owns the
+  // tab-capture canvas and the WS client, so it grabs the frame and sends the
+  // assembled slice in one hop).
+  | { type: 'start_tab_stream'; streamId: string }
+  | { type: 'stop_tab_stream' }
+  | { type: 'send_slice'; payload: SliceCapture }
 
 // ---------------------------------------------------------------------------
 // Status response from service worker to popup

@@ -1,7 +1,9 @@
+import type { Page } from '@gazekit/shared'
+
 interface HeatmapUrlTabsProps {
-  urls: string[]
-  selectedUrl: string
-  onUrlChange: (url: string) => void
+  pages: Page[]
+  selectedPageId: string
+  onPageChange: (pageId: string) => void
 }
 
 function displayUrl(url: string): string {
@@ -13,28 +15,46 @@ function displayUrl(url: string): string {
   }
 }
 
+/**
+ * Page tabs for a session's heatmap view. Unlike the old string-URL grouping,
+ * each tab is a distinct Page instance (keyed by pageId), so revisiting the
+ * same URL later in a session shows as a separate tab instead of merging.
+ */
 export default function HeatmapUrlTabs({
-  urls,
-  selectedUrl,
-  onUrlChange,
+  pages,
+  selectedPageId,
+  onPageChange,
 }: HeatmapUrlTabsProps) {
-  if (urls.length === 0) return null
+  if (pages.length === 0) return null
+
+  // Disambiguate repeat visits to the same URL with a #n suffix.
+  const urlCounts = new Map<string, number>()
+  for (const p of pages) urlCounts.set(p.url, (urlCounts.get(p.url) ?? 0) + 1)
+  const seen = new Map<string, number>()
 
   return (
-    <div className="border-b border-surface-700 mb-4 overflow-x-auto">
-      <div className="flex gap-0">
-        {urls.map((url) => (
-          <button
-            key={url}
-            onClick={() => onUrlChange(url)}
-            className={url === selectedUrl ? 'tab-active' : 'tab'}
-            title={url}
-          >
-            <span className="truncate max-w-[200px] inline-block align-bottom">
-              {displayUrl(url)}
-            </span>
-          </button>
-        ))}
+    <div className="mb-4 overflow-x-auto">
+      <div className="flex gap-2 bg-surface-900 border-2 border-accent-100 rounded-full p-1.5 w-fit shadow-sticker">
+        {pages.map((page) => {
+          const isRepeat = (urlCounts.get(page.url) ?? 0) > 1
+          const visitNo = (seen.get(page.url) ?? 0) + 1
+          seen.set(page.url, visitNo)
+          return (
+            <button
+              key={page._id}
+              onClick={() => onPageChange(page._id)}
+              className={page._id === selectedPageId ? 'tab-active' : 'tab'}
+              title={page.url}
+            >
+              <span className="truncate max-w-[200px] inline-block align-bottom">
+                {displayUrl(page.url)}
+                {isRepeat && (
+                  <span className="text-surface-500 ml-1">#{visitNo}</span>
+                )}
+              </span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )

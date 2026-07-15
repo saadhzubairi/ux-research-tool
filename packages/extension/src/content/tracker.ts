@@ -3,8 +3,7 @@
 // ---------------------------------------------------------------------------
 // Injected by the service worker via chrome.scripting.executeScript.
 // Initializes and coordinates all subsystems:
-//   - batchManager — gaze event batching & delivery
-//   - domRecorder  — rrweb DOM recording with gaze plugin
+//   - sliceManager — the slice clock: gaze accumulation + cadence + delivery
 //   - spaDetector  — client-side route change detection
 //   - domVersionTracker — significant DOM mutation counter
 //   - heatmapOverlay — live heatmap canvas
@@ -15,13 +14,13 @@
 // Idempotent: re-injection does not create duplicate trackers.
 // ---------------------------------------------------------------------------
 
-import type { GazeSample } from '@gazekit/shared'
+import type { GazeSample, WindowGeometry } from '@gazekit/shared'
+import { captureWindowGeometry, viewportOriginOnScreen } from '@gazekit/shared'
 import type {
   ServiceWorkerToContentMessage,
   ExtensionSettings,
 } from '../types/extension'
-import { batchManager } from './batchManager'
-import { domRecorder, gazeEmitter } from './domRecorder'
+import { sliceManager } from './sliceManager'
 import { spaDetector } from './spaDetector'
 import {
   startDomVersionTracking,
@@ -49,11 +48,56 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
 
   let gazePointCount = 0
 
-  // The gaze callback reference — kept so we can unsubscribe on stop
-  const gazeCallback = (sample: GazeSample): void => {
+  // Page zoom factor, pushed by the service worker (chrome.tabs.getZoom).
+  // Needed to convert between global screen px and this page's CSS px.
+  let zoomFactor = 1
+
+  // How far outside the viewport a converted sample may land before we treat
+  // it as gaze at browser chrome / another window and drop it.
+  const VIEWPORT_SLACK_PX = 50
+
+  // True viewport origin measured from a real user click
+  // (MouseEvent.screenX/Y are global screen px; clientX/Y are CSS px).
+  // More reliable than the chrome-height heuristic when DevTools is docked
+  // to the side/bottom. Valid only while the window geometry that produced
+  // it is unchanged.
+  let measuredOrigin: { x: number; y: number; geomKey: string } | null = null
+
+  const geometryKey = (g: WindowGeometry): string =>
+    `${g.screenX},${g.screenY},${g.outerWidth},${g.outerHeight},${g.innerWidth},${g.innerHeight},${g.zoom}`
+
+  const currentViewportOrigin = (geometry: WindowGeometry): { x: number; y: number } => {
+    if (measuredOrigin && measuredOrigin.geomKey === geometryKey(geometry)) {
+      return { x: measuredOrigin.x, y: measuredOrigin.y }
+    }
+    return viewportOriginOnScreen(geometry)
+  }
+
+  // Samples arrive from the offscreen gaze engine in GLOBAL SCREEN px.
+  // Convert them to this tab's viewport coordinates using live window
+  // geometry — this is what makes a session survive the window being moved
+  // or resized after calibration.
+  const gazeCallback = (screenSample: GazeSample): void => {
+    const geometry = captureWindowGeometry(window, zoomFactor)
+    const origin = currentViewportOrigin(geometry)
+    const client = {
+      x: (screenSample.x - origin.x) / geometry.zoom,
+      y: (screenSample.y - origin.y) / geometry.zoom,
+    }
+
+    if (
+      client.x < -VIEWPORT_SLACK_PX ||
+      client.y < -VIEWPORT_SLACK_PX ||
+      client.x > window.innerWidth + VIEWPORT_SLACK_PX ||
+      client.y > window.innerHeight + VIEWPORT_SLACK_PX
+    ) {
+      return // looking at browser chrome or outside this window
+    }
+
+    const sample: GazeSample = { ...screenSample, x: client.x, y: client.y }
+
     gazePointCount++
-    batchManager.addSample(sample)
-    gazeEmitter.emit(sample) // Feed rrweb gaze plugin
+    sliceManager.addSample(sample)
     if (heatmapEnabled) {
       heatmapOverlay.addPoint(sample.x, sample.y)
     }
@@ -63,21 +107,41 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
     }
   }
 
-  // Route change callback — reports SPA navigations to service worker
-  const routeChangeCallback = (url: string): void => {
-    let heatmapDataUrl: string | undefined
+  // Users look where they click — forward clicks (in screen px) so the
+  // offscreen engine can correct slow drift against them. Each click also
+  // reveals the TRUE viewport origin, which supersedes the geometry heuristic.
+  const clickAnchorListener = (event: MouseEvent): void => {
+    if (!isTracking || isPaused) return
+    const geometry = captureWindowGeometry(window, zoomFactor)
+
+    measuredOrigin = {
+      x: event.screenX - event.clientX * geometry.zoom,
+      y: event.screenY - event.clientY * geometry.zoom,
+      geomKey: geometryKey(geometry),
+    }
+
+    // event.screenX/Y ARE the click's global screen position — use directly
+    chrome.runtime.sendMessage(
+      {
+        type: 'gaze_click_anchor',
+        screenX: event.screenX,
+        screenY: event.screenY,
+        ts: Date.now(),
+      },
+      () => {
+        if (chrome.runtime.lastError) { /* non-fatal */ }
+      },
+    )
+  }
+
+  // Route change callback — an SPA navigation fires an immediate slice with
+  // trigger 'navigation' (server closes the current Page, opens a new one) and
+  // resets the slice clock.
+  const routeChangeCallback = (_url: string): void => {
     if (heatmapEnabled) {
-      heatmapDataUrl = heatmapOverlay.snapshot()
       heatmapOverlay.clear()
     }
-    chrome.runtime.sendMessage({ type: 'page_change', url, heatmapDataUrl }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn(
-          '[GazeKit] Failed to send page_change:',
-          chrome.runtime.lastError.message,
-        )
-      }
-    })
+    sliceManager.triggerNavigationSlice()
   }
 
   // -----------------------------------------------------------------------
@@ -103,17 +167,17 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
     spaDetector.start()
     spaDetector.onRouteChange(routeChangeCallback)
 
-    // 3. Start batch manager
-    batchManager.start(sessionId)
+    // 3. Start the slice clock (gaze accumulation + cadence + delivery)
+    sliceManager.start(sessionId)
 
-    // 4. Start rrweb DOM recorder
-    await domRecorder.start(sessionId)
-
-    // 5. Gaze samples now arrive via messages from service worker (offscreen gaze engine)
+    // 4. Gaze samples now arrive via messages from service worker (offscreen gaze engine)
 
     if (heatmapEnabled) {
       heatmapOverlay.start()
     }
+
+    // 6. Click anchors for drift correction
+    window.addEventListener('mousedown', clickAnchorListener, true)
 
     gazePointCount = 0
     console.log('[GazeKit] ✓ Tracking started for session', sessionId, heatmapEnabled ? '(heatmap ON)' : '(heatmap OFF)')
@@ -123,23 +187,13 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
   function stopTracking(): void {
     if (!isTracking && !sessionId) return
 
-    // Snapshot heatmap before teardown
     if (heatmapEnabled) {
-      try {
-        const heatmapDataUrl = heatmapOverlay.snapshot()
-        if (heatmapDataUrl) {
-          chrome.runtime.sendMessage(
-            { type: 'page_change', url: location.href, heatmapDataUrl },
-            () => { if (chrome.runtime.lastError) { /* non-fatal */ } },
-          )
-        }
-      } catch { /* non-fatal */ }
       heatmapOverlay.stop()
     }
 
     // Tear down in reverse order (gaze engine runs in offscreen — no local cleanup)
-    domRecorder.stop()
-    batchManager.stop()
+    window.removeEventListener('mousedown', clickAnchorListener, true)
+    sliceManager.stop()
 
     spaDetector.offRouteChange(routeChangeCallback)
     spaDetector.stop()
@@ -158,7 +212,7 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
     if (!isTracking || isPaused) return
 
     isPaused = true
-    batchManager.pause()
+    sliceManager.pause()
 
     chrome.runtime.sendMessage(
       { type: 'tracking_status', status: 'paused' },
@@ -176,7 +230,7 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
     if (!isTracking || !isPaused) return
 
     isPaused = false
-    batchManager.resume()
+    sliceManager.resume()
 
     chrome.runtime.sendMessage(
       { type: 'tracking_status', status: 'active' },
@@ -235,13 +289,27 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
         }
 
         case 'gaze_samples': {
-          // Gaze samples from offscreen engine, forwarded by service worker
-          if (isTracking && !isPaused) {
+          // Gaze samples from offscreen engine, forwarded by service worker.
+          // Drop them when this tab isn't visible — otherwise minutes of gaze
+          // aimed at another tab/window get baked into this page's heatmap.
+          if (isTracking && !isPaused && document.visibilityState === 'visible') {
             for (const sample of message.samples) {
               gazeCallback(sample)
             }
-          } else {
-            console.warn('[GazeKit] gaze_samples dropped: isTracking=', isTracking, 'isPaused=', isPaused)
+          }
+          sendResponse({ received: true })
+          break
+        }
+
+        case 'zoom_update': {
+          zoomFactor = message.zoomFactor > 0 ? message.zoomFactor : 1
+          sendResponse({ received: true })
+          break
+        }
+
+        case 'navigation_slice': {
+          if (isTracking && !isPaused) {
+            sliceManager.triggerNavigationSlice()
           }
           sendResponse({ received: true })
           break
@@ -257,18 +325,6 @@ if (!(window as unknown as GazeKitWindow)[GAZEKIT_KEY]) {
       return true
     },
   )
-
-  // Capture heatmap on full-page navigation (content script about to be destroyed)
-  window.addEventListener('beforeunload', () => {
-    if (heatmapEnabled && isTracking) {
-      try {
-        const heatmapDataUrl = heatmapOverlay.snapshot()
-        if (heatmapDataUrl) {
-          chrome.runtime.sendMessage({ type: 'page_change', url: location.href, heatmapDataUrl })
-        }
-      } catch { /* race — best effort */ }
-    }
-  })
 
   console.log('[GazeKit] Content script initialized')
 }

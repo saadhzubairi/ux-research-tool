@@ -63,7 +63,7 @@ export default function ElementTable({ elements, isLoading }: ElementTableProps)
   function SortableHeader({ field, children }: { field: SortField; children: React.ReactNode }) {
     return (
       <th
-        className="px-4 py-3 text-left text-xs font-medium text-surface-400 uppercase tracking-wider cursor-pointer hover:text-surface-200 select-none"
+        className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider cursor-pointer hover:text-accent-600 select-none"
         onClick={() => handleSort(field)}
       >
         <span className="inline-flex items-center">
@@ -94,9 +94,9 @@ export default function ElementTable({ elements, isLoading }: ElementTableProps)
   return (
     <div className="card p-0 overflow-x-auto">
       <table className="w-full">
-        <thead className="bg-surface-800/50">
+        <thead className="bg-accent-50">
           <tr>
-            <th className="px-4 py-3 text-left text-xs font-medium text-surface-400 uppercase tracking-wider">
+            <th className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider">
               Element
             </th>
             <SortableHeader field="dwell">Dwell Time</SortableHeader>
@@ -138,9 +138,9 @@ export default function ElementTable({ elements, isLoading }: ElementTableProps)
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 bg-surface-700 overflow-hidden max-w-[100px]">
+                  <div className="flex-1 h-2 bg-accent-100 rounded-full overflow-hidden max-w-[100px]">
                     <div
-                      className="h-full bg-accent-500"
+                      className="h-full bg-pink-500 rounded-full"
                       style={{ width: `${Math.min(el.percentOfTotalDwell, 100)}%` }}
                     />
                   </div>

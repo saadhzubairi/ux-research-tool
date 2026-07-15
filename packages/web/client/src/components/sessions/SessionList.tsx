@@ -113,7 +113,7 @@ export default function SessionList() {
   function SortableHeader({ field, children }: { field: SortField; children: React.ReactNode }) {
     return (
       <th
-        className="px-4 py-3 text-left text-xs font-medium text-surface-400 uppercase tracking-wider cursor-pointer hover:text-surface-200 select-none"
+        className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider cursor-pointer hover:text-accent-600 select-none"
         onClick={() => handleSort(field)}
       >
         <span className="inline-flex items-center">
@@ -195,24 +195,24 @@ export default function SessionList() {
 
       <div className="card p-0 overflow-hidden">
         <table className="w-full">
-          <thead className="bg-surface-800/50">
+          <thead className="bg-accent-50">
             <tr>
               <th className="px-4 py-3 w-10">
                 <input
                   type="checkbox"
                   checked={selectedIds.size === filteredSessions.length && filteredSessions.length > 0}
                   onChange={toggleSelectAll}
-                  className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+                  className="checkbox w-4 h-4"
                 />
               </th>
               <SortableHeader field="date">Date</SortableHeader>
               <SortableHeader field="duration">Duration</SortableHeader>
-              <th className="px-4 py-3 text-left text-xs font-medium text-surface-400 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider">
                 URL(s)
               </th>
               <SortableHeader field="gazePoints">Gaze Points</SortableHeader>
               <SortableHeader field="quality">Calibration</SortableHeader>
-              <th className="px-4 py-3 text-left text-xs font-medium text-surface-400 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider">
                 Status
               </th>
             </tr>

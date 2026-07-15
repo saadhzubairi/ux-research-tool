@@ -2,24 +2,57 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { VALIDATION_POINTS } from '@gazekit/shared'
 import { ProgressBar } from '../components/ProgressBar'
 
+export interface ValidationResult {
+  /** Median of per-point median errors — robust headline accuracy number */
+  medianErrorPx: number
+  /** 95th percentile of all sample errors — worst-case indicator */
+  p95ErrorPx: number
+  /** RMS dispersion of predictions around their own centroid (jitter) */
+  precisionPx: number
+  /** Per-point median error, same order as VALIDATION_POINTS (NaN = no data) */
+  perPointErrorPx: number[]
+  /** Fraction of the display window that produced valid predictions */
+  sampleCoverage: number
+}
+
 interface ValidationStepProps {
   getPrediction: () => { x: number; y: number } | null
   prediction: { x: number; y: number } | null
   faceDetected: boolean
-  onComplete: (avgErrorPx: number) => void
+  onComplete: (result: ValidationResult) => void
 }
 
-const DISPLAY_DURATION_MS = 4000
+// The first portion of each point covers the saccade to the target and
+// fixation settling — sampling during it would inflate measured error.
+const SETTLE_MS = 1000
+const SAMPLE_MS = 2500
 const SAMPLE_INTERVAL_MS = 50
+
+function median(values: number[]): number {
+  if (values.length === 0) return NaN
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0
+    ? ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2
+    : (sorted[mid] as number)
+}
+
+interface PointSamples {
+  errors: number[]
+  predictions: Array<{ x: number; y: number }>
+  expectedSamples: number
+}
 
 export function ValidationStep({ getPrediction, prediction, faceDetected, onComplete }: ValidationStepProps) {
   const [currentPointIndex, setCurrentPointIndex] = useState(0)
-  const [errors, setErrors] = useState<number[]>([])
+  const [settling, setSettling] = useState(true)
   const [collecting, setCollecting] = useState(true)
   const [sampleCount, setSampleCount] = useState(0)
   const [liveError, setLiveError] = useState<number | null>(null)
-  const samplesRef = useRef<Array<{ predicted: { x: number; y: number }; actual: { x: number; y: number } }>>([])
+  const pointResultsRef = useRef<PointSamples[]>([])
+  const samplesRef = useRef<PointSamples>({ errors: [], predictions: [], expectedSamples: 0 })
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const advanceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const completedRef = useRef(false)
 
@@ -43,49 +76,43 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, onComp
     }
     const actualX = currentPoint.x * window.innerWidth
     const actualY = currentPoint.y * window.innerHeight
-    const dx = prediction.x - actualX
-    const dy = prediction.y - actualY
-    setLiveError(Math.sqrt(dx * dx + dy * dy))
+    setLiveError(Math.hypot(prediction.x - actualX, prediction.y - actualY))
   }, [prediction, currentPoint])
 
-  const collectSamples = useCallback(() => {
+  const collectSample = useCallback(() => {
     if (!currentPoint) return
+    samplesRef.current.expectedSamples++
     const pred = getPrediction()
-    if (pred) {
+    if (pred && Number.isFinite(pred.x) && Number.isFinite(pred.y)) {
       const actualX = currentPoint.x * window.innerWidth
       const actualY = currentPoint.y * window.innerHeight
-      samplesRef.current.push({
-        predicted: pred,
-        actual: { x: actualX, y: actualY },
-      })
-      setSampleCount(samplesRef.current.length)
+      samplesRef.current.errors.push(Math.hypot(pred.x - actualX, pred.y - actualY))
+      samplesRef.current.predictions.push(pred)
+      setSampleCount(samplesRef.current.errors.length)
     }
   }, [currentPoint, getPrediction])
 
   useEffect(() => {
     if (!collecting || !currentPoint) return
 
-    samplesRef.current = []
+    samplesRef.current = { errors: [], predictions: [], expectedSamples: 0 }
     setSampleCount(0)
+    setSettling(true)
 
-    timerRef.current = setInterval(collectSamples, SAMPLE_INTERVAL_MS)
+    // Discard the settle window entirely, then sample
+    settleTimerRef.current = setTimeout(() => {
+      setSettling(false)
+      timerRef.current = setInterval(collectSample, SAMPLE_INTERVAL_MS)
+    }, SETTLE_MS)
 
     advanceRef.current = setTimeout(() => {
       if (timerRef.current) clearInterval(timerRef.current)
 
-      const samples = samplesRef.current
-      if (samples.length > 0) {
-        const totalError = samples.reduce((sum, s) => {
-          const dx = s.predicted.x - s.actual.x
-          const dy = s.predicted.y - s.actual.y
-          return sum + Math.sqrt(dx * dx + dy * dy)
-        }, 0)
-        const avgError = totalError / samples.length
-        setErrors((prev) => [...prev, avgError])
-        console.log(`[GazeKit] Point ${currentPointIndex + 1}: ${samples.length} samples, avg error ${avgError.toFixed(1)}px`)
-      } else {
-        console.warn(`[GazeKit] Point ${currentPointIndex + 1}: 0 samples collected!`)
-      }
+      pointResultsRef.current.push(samplesRef.current)
+      const medErr = median(samplesRef.current.errors)
+      console.log(
+        `[GazeKit] Validation point ${currentPointIndex + 1}: ${samplesRef.current.errors.length} samples, median error ${Number.isFinite(medErr) ? medErr.toFixed(1) : 'n/a'}px`,
+      )
 
       const nextIndex = currentPointIndex + 1
       if (nextIndex >= totalPoints) {
@@ -93,24 +120,59 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, onComp
       } else {
         setCurrentPointIndex(nextIndex)
       }
-    }, DISPLAY_DURATION_MS)
+    }, SETTLE_MS + SAMPLE_MS)
 
     return () => {
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current)
       if (timerRef.current) clearInterval(timerRef.current)
       if (advanceRef.current) clearTimeout(advanceRef.current)
     }
-  }, [currentPointIndex, collecting, currentPoint, totalPoints, collectSamples])
+  }, [currentPointIndex, collecting, currentPoint, totalPoints, collectSample])
 
   useEffect(() => {
-    if (!collecting && !completedRef.current) {
-      completedRef.current = true
-      const overallAvg = errors.length > 0
-        ? errors.reduce((a, b) => a + b, 0) / errors.length
-        : 999
-      console.log(`[GazeKit] Validation complete: ${errors.length} points measured, avg error ${overallAvg.toFixed(1)}px`)
-      setTimeout(() => onComplete(overallAvg), 500)
+    if (collecting || completedRef.current) return
+    completedRef.current = true
+
+    const points = pointResultsRef.current
+    const perPointErrorPx = points.map((p) => median(p.errors))
+    const validMedians = perPointErrorPx.filter((e) => Number.isFinite(e))
+    const allErrors = points.flatMap((p) => p.errors).sort((a, b) => a - b)
+
+    // Precision: RMS distance of each point's predictions from their own centroid
+    let precisionSq = 0
+    let precisionN = 0
+    for (const p of points) {
+      if (p.predictions.length < 2) continue
+      const cx = p.predictions.reduce((s, v) => s + v.x, 0) / p.predictions.length
+      const cy = p.predictions.reduce((s, v) => s + v.y, 0) / p.predictions.length
+      for (const v of p.predictions) {
+        precisionSq += (v.x - cx) ** 2 + (v.y - cy) ** 2
+        precisionN++
+      }
     }
-  }, [collecting, errors, onComplete])
+
+    const totalExpected = points.reduce((s, p) => s + p.expectedSamples, 0)
+    const totalGot = points.reduce((s, p) => s + p.errors.length, 0)
+
+    const result: ValidationResult = {
+      medianErrorPx: validMedians.length > 0 ? median(validMedians) : NaN,
+      p95ErrorPx:
+        allErrors.length > 0
+          ? (allErrors[Math.min(allErrors.length - 1, Math.floor(allErrors.length * 0.95))] as number)
+          : NaN,
+      precisionPx: precisionN > 0 ? Math.sqrt(precisionSq / precisionN) : NaN,
+      perPointErrorPx,
+      sampleCoverage: totalExpected > 0 ? totalGot / totalExpected : 0,
+    }
+
+    console.log(
+      `[GazeKit] Validation complete: median ${Number.isFinite(result.medianErrorPx) ? result.medianErrorPx.toFixed(1) : 'n/a'}px, ` +
+        `p95 ${Number.isFinite(result.p95ErrorPx) ? result.p95ErrorPx.toFixed(1) : 'n/a'}px, ` +
+        `precision ${Number.isFinite(result.precisionPx) ? result.precisionPx.toFixed(1) : 'n/a'}px, ` +
+        `coverage ${(result.sampleCoverage * 100).toFixed(0)}%`,
+    )
+    setTimeout(() => onComplete(result), 500)
+  }, [collecting, onComplete])
 
   const targetX = currentPoint ? currentPoint.x * window.innerWidth : 0
   const targetY = currentPoint ? currentPoint.y * window.innerHeight : 0
@@ -132,7 +194,7 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, onComp
             top: `${currentPoint.y * 100}%`,
           }}
         >
-          <span className="block h-5 w-5 rounded-full bg-indigo-500">
+          <span className={`block h-5 w-5 rounded-full ${settling ? 'bg-indigo-300' : 'bg-indigo-500'}`}>
             <span className="absolute inset-0 animate-ping rounded-full bg-indigo-400/40" style={{ width: '28px', height: '28px', left: '-4px', top: '-4px' }} />
           </span>
         </div>
@@ -177,7 +239,9 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, onComp
           <span>Face: {faceDetected ? 'Detected' : 'Not detected'}</span>
         </div>
 
-        <div className="mb-1 text-gray-400">--- Point {currentPointIndex + 1}/{totalPoints} ---</div>
+        <div className="mb-1 text-gray-400">
+          --- Point {currentPointIndex + 1}/{totalPoints} {settling ? '(settling)' : ''} ---
+        </div>
 
         <div className="text-indigo-600">
           Target: ({Math.round(targetX)}, {Math.round(targetY)})
@@ -195,13 +259,16 @@ export function ValidationStep({ getPrediction, prediction, faceDetected, onComp
           Samples: {sampleCount}
         </div>
 
-        {errors.length > 0 && (
+        {pointResultsRef.current.length > 0 && (
           <div className="mt-2 border-t border-gray-200 pt-2 text-gray-500">
-            {errors.map((e, i) => (
-              <div key={i} className="text-gray-400">
-                Pt {i + 1}: {Math.round(e)}px avg
-              </div>
-            ))}
+            {pointResultsRef.current.map((p, i) => {
+              const m = median(p.errors)
+              return (
+                <div key={i} className="text-gray-400">
+                  Pt {i + 1}: {Number.isFinite(m) ? `${Math.round(m)}px median` : 'no data'}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

@@ -17,11 +17,11 @@ export default function TopBar() {
       : 'degraded'
 
   return (
-    <header className="h-14 bg-surface-900 border-b border-surface-700 flex items-center justify-between px-4">
+    <header className="h-16 flex items-center justify-between px-4 pr-6">
       <div className="flex items-center gap-3">
         <button
           onClick={toggleSidebar}
-          className="btn-ghost p-1.5 rounded-md"
+          className="btn-ghost p-2"
           aria-label="Toggle sidebar"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -36,17 +36,17 @@ export default function TopBar() {
 
       <div className="flex items-center gap-4">
         {activeSessionId && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-green-900/30 border border-green-800/50">
-            <span className="w-2 h-2 bg-green-400 animate-pulse" />
-            <span className="text-xs text-green-400 font-medium">
+          <div className="flex items-center gap-2 px-3 py-1 bg-emerald-100 border-2 border-emerald-200 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-xs text-emerald-700 font-bold">
               Tracking Active
             </span>
           </div>
         )}
 
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-2 text-sm bg-surface-900 border-2 border-accent-100 rounded-full px-3.5 py-1.5 shadow-sticker">
           <StatusIndicator status={overallStatus} />
-          <span className="text-surface-400">
+          <span className="text-surface-300 font-bold">
             {overallStatus === 'connected'
               ? 'Server connected'
               : overallStatus === 'degraded'

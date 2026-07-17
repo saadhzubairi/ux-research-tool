@@ -59,6 +59,35 @@ sessionsRouter.get('/', validateQuery(sessionsQuerySchema), async (req, res, nex
       Session.countDocuments(filter),
     ])
 
+    // v2 sessions store visited pages as first-class Page docs rather than the
+    // legacy embedded `pages[]`. Synthesize that embedded shape (url/enteredAt/
+    // leftAt) from the Page collection so the sessions list URL column renders
+    // for both v1 (already embedded) and v2 sessions.
+    type EmbeddedPage = { url: string; enteredAt: string; leftAt: string | null }
+    const withPages = sessions as Array<
+      (typeof sessions)[number] & { pages?: EmbeddedPage[] }
+    >
+    const needPages = withPages.filter((s) => !s.pages || s.pages.length === 0)
+    if (needPages.length > 0) {
+      const ids = needPages.map((s) => s.sessionId)
+      const pageDocs = await Page.find({ sessionId: { $in: ids } })
+        .sort({ sessionId: 1, pageIndex: 1 })
+        .lean()
+      const bySession = new Map<string, EmbeddedPage[]>()
+      for (const p of pageDocs) {
+        const arr = bySession.get(p.sessionId) ?? []
+        arr.push({
+          url: p.url,
+          enteredAt: new Date(p.enteredAt).toISOString(),
+          leftAt: p.leftAt ? new Date(p.leftAt).toISOString() : null,
+        })
+        bySession.set(p.sessionId, arr)
+      }
+      for (const s of needPages) {
+        s.pages = bySession.get(s.sessionId) ?? []
+      }
+    }
+
     const response: ApiResponse<{
       sessions: typeof sessions
       total: number

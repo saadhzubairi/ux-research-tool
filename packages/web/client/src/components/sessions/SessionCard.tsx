@@ -16,8 +16,11 @@ function qualityBadge(score: number) {
 }
 
 function statusBadge(session: SessionMeta) {
-  if (!session.endedAt) {
+  if (session.status === 'active') {
     return <span className="badge-success">Active</span>
+  }
+  if (session.status === 'error') {
+    return <span className="badge-danger">Error</span>
   }
   return <span className="badge bg-surface-800 text-surface-300">Completed</span>
 }
@@ -28,7 +31,7 @@ export default function SessionCard({
   onToggleSelect,
   onClick,
 }: SessionCardProps) {
-  const urls = session.pages.map((p) => {
+  const urls = (session.pages ?? []).map((p) => {
     try {
       return new URL(p.url).hostname + new URL(p.url).pathname
     } catch {

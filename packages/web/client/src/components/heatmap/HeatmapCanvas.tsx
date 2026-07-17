@@ -8,9 +8,17 @@ interface HeatmapCanvasProps {
   /**
    * Slice source (SessionDetailPage): cumulative fixations across
    * slices[0..currentSlice]. Normalized against viewportWidth/Height (taken
-   * from the current slice's screenshot). Weighted by durationMs.
+   * from the current slice's screenshot). Weighted by durationMs. Used only
+   * when `showFixations` is on (fixations are sparse — see gazePoints).
    */
   fixations?: SliceFixation[]
+  /**
+   * Raw gaze points (viewport px) for the session-detail heatmap — the density
+   * source that actually forms the map. Per-slice fixations are far too sparse
+   * to render a heatmap, so raw gaze density is the default; fixations are the
+   * opt-in "Show Fixations Only" overlay. Normalized against viewportWidth/Height.
+   */
+  gazePoints?: Array<{ x: number; y: number; value?: number }>
   viewportWidth?: number
   viewportHeight?: number
   screenshotUrl?: string | null
@@ -53,10 +61,17 @@ function getPalette() {
   return palette
 }
 
+/**
+ * Density-grid heatmap renderer. Accumulates a Gaussian splat per point into a
+ * float grid (at reduced resolution for speed), normalizes against a
+ * high-percentile density (so one dominant hotspot can't wash out the rest of
+ * the map), then colorizes via the palette. This is self-normalizing: the
+ * hottest areas always reach the top of the palette regardless of how many
+ * points there are or how their weights are distributed.
+ */
 function renderHeatmap(
   canvas: HTMLCanvasElement,
   points: Array<{ x: number; y: number; value: number }>,
-  maxValue: number,
   radius: number,
   opacity: number,
 ) {
@@ -64,47 +79,90 @@ function renderHeatmap(
   const height = canvas.height
   if (width === 0 || height === 0) return
 
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  const ctx = canvas.getContext('2d')!
   ctx.clearRect(0, 0, width, height)
   if (points.length === 0) return
 
-  // 1 — draw intensity circles (alpha channel encodes heat)
-  const buf = document.createElement('canvas')
-  buf.width = width
-  buf.height = height
-  const bCtx = buf.getContext('2d')!
+  // Work at reduced resolution — plenty for a blurred density field.
+  const DOWNSCALE = 4
+  const gw = Math.max(1, Math.ceil(width / DOWNSCALE))
+  const gh = Math.max(1, Math.ceil(height / DOWNSCALE))
+  const grid = new Float32Array(gw * gh)
 
-  for (const p of points) {
-    const intensity = Math.min(p.value / maxValue, 1)
-    const grad = bCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius)
-    grad.addColorStop(0, `rgba(0,0,0,${intensity})`)
-    grad.addColorStop(1, 'rgba(0,0,0,0)')
-    bCtx.fillStyle = grad
-    bCtx.fillRect(p.x - radius, p.y - radius, radius * 2, radius * 2)
-  }
-
-  // 2 — colorize using palette lookup on alpha channel
-  const img = bCtx.getImageData(0, 0, width, height)
-  const px = img.data
-  const pal = getPalette()
-
-  for (let i = 0; i < px.length; i += 4) {
-    const a = px[i + 3]!
-    if (a > 0) {
-      const off = a * 4
-      px[i] = pal[off]!
-      px[i + 1] = pal[off + 1]!
-      px[i + 2] = pal[off + 2]!
-      px[i + 3] = Math.round(a * (opacity / 100))
+  // Precompute a Gaussian kernel sized to the requested blur radius.
+  const r = Math.max(2, Math.round(radius / DOWNSCALE))
+  const sigma = r / 2
+  const kSize = r * 2 + 1
+  const kernel = new Float32Array(kSize * kSize)
+  for (let ky = -r; ky <= r; ky++) {
+    for (let kx = -r; kx <= r; kx++) {
+      kernel[(ky + r) * kSize + (kx + r)] = Math.exp(
+        -(kx * kx + ky * ky) / (2 * sigma * sigma),
+      )
     }
   }
 
-  ctx.putImageData(img, 0, 0)
+  // Stamp each point. sqrt() compresses the weight's dynamic range so a single
+  // long fixation doesn't flatten everything else into invisibility.
+  for (const p of points) {
+    const cx = Math.round(p.x / DOWNSCALE)
+    const cy = Math.round(p.y / DOWNSCALE)
+    const w = Math.sqrt(Math.max(p.value, 1))
+    for (let ky = -r; ky <= r; ky++) {
+      const gy = cy + ky
+      if (gy < 0 || gy >= gh) continue
+      const rowOff = gy * gw
+      const kOff = (ky + r) * kSize
+      for (let kx = -r; kx <= r; kx++) {
+        const gx = cx + kx
+        if (gx < 0 || gx >= gw) continue
+        grid[rowOff + gx]! += w * kernel[kOff + (kx + r)]!
+      }
+    }
+  }
+
+  // Normalize against the ~95th percentile of non-zero density: hotspots
+  // saturate the palette top while mid-density regions stay clearly visible.
+  const nonZero: number[] = []
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i]! > 0) nonZero.push(grid[i]!)
+  }
+  if (nonZero.length === 0) return
+  nonZero.sort((a, b) => a - b)
+  const norm = nonZero[Math.floor(nonZero.length * 0.95)]! || nonZero[nonZero.length - 1]!
+
+  // Colorize the low-res grid, then upscale with smoothing.
+  const buf = document.createElement('canvas')
+  buf.width = gw
+  buf.height = gh
+  const bCtx = buf.getContext('2d')!
+  const img = bCtx.createImageData(gw, gh)
+  const px = img.data
+  const pal = getPalette()
+  const alphaScale = (opacity / 100) * 255
+
+  for (let i = 0; i < grid.length; i++) {
+    const t = Math.min(grid[i]! / norm, 1)
+    if (t <= 0.02) continue
+    const off = Math.min(255, Math.round(t * 255)) * 4
+    const o = i * 4
+    px[o] = pal[off]!
+    px[o + 1] = pal[off + 1]!
+    px[o + 2] = pal[off + 2]!
+    // Alpha ramps in quickly so even light-density areas are clearly visible.
+    px[o + 3] = Math.round(Math.min(1, 0.35 + t * 0.85) * alphaScale)
+  }
+
+  bCtx.putImageData(img, 0, 0)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(buf, 0, 0, gw, gh, 0, 0, width, height)
 }
 
 export default function HeatmapCanvas({
   data,
   fixations,
+  gazePoints,
   viewportWidth,
   viewportHeight,
   screenshotUrl,
@@ -119,20 +177,22 @@ export default function HeatmapCanvas({
 
   // Normalize either source into one shape the renderer understands.
   const resolved: ResolvedHeatmap | null = useMemo(() => {
-    if (fixations) {
+    // Slice source (session detail): raw gaze density by default, precomputed
+    // fixations when "Show Fixations Only" is on. Either array being provided
+    // (even empty, e.g. the moment view) selects this over the aggregate `data`.
+    if (gazePoints || fixations) {
       const vw = viewportWidth || 1
       const vh = viewportHeight || 1
-      const points = fixations.map((f) => ({
-        nx: f.x / vw,
-        ny: f.y / vh,
-        value: f.durationMs || 1,
-      }))
+      const useFixations = showFixations && !!fixations && fixations.length > 0
+      const points = useFixations
+        ? fixations!.map((f) => ({ nx: f.x / vw, ny: f.y / vh, value: f.durationMs || 1 }))
+        : (gazePoints ?? []).map((p) => ({ nx: p.x / vw, ny: p.y / vh, value: p.value ?? 1 }))
       return {
         viewportWidth: vw,
         viewportHeight: vh,
         points,
         screenshotUrl: screenshotUrl ?? null,
-        totalFixations: fixations.length,
+        totalFixations: fixations?.length ?? 0,
         pointCount: points.length,
       }
     }
@@ -147,7 +207,7 @@ export default function HeatmapCanvas({
       }
     }
     return null
-  }, [data, fixations, viewportWidth, viewportHeight, screenshotUrl])
+  }, [data, fixations, gazePoints, viewportWidth, viewportHeight, screenshotUrl, showFixations])
 
   const paint = useCallback(() => {
     if (!canvasRef.current || !containerRef.current || !resolved) return
@@ -163,19 +223,18 @@ export default function HeatmapCanvas({
 
     const scaleX = width / resolved.viewportWidth
 
-    const points = resolved.points
-      .filter((p) => (showFixations ? p.value > 1 : true))
-      .map((p) => ({
-        x: Math.round(p.nx * width),
-        y: Math.round(p.ny * height),
-        value: p.value,
-      }))
+    // Source selection (raw gaze vs fixations) already happened in `resolved`;
+    // just project normalized points into canvas px.
+    const points = resolved.points.map((p) => ({
+      x: Math.round(p.nx * width),
+      y: Math.round(p.ny * height),
+      value: p.value,
+    }))
 
-    const maxVal = points.reduce((max, p) => Math.max(max, p.value), 1)
     // blurRadius is defined in viewport px — scale it with the points so the
     // apparent hotspot size doesn't change with the dashboard container size
-    renderHeatmap(canvas, points, maxVal, blurRadius * scaleX, opacity)
-  }, [resolved, opacity, blurRadius, showFixations])
+    renderHeatmap(canvas, points, blurRadius * scaleX, opacity)
+  }, [resolved, opacity, blurRadius])
 
   useEffect(() => {
     paint()

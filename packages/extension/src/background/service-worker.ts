@@ -326,6 +326,7 @@ async function startSessionBackground(
         startedAt: new Date().toISOString(),
         endedAt: null,
         durationMs: null,
+        status: 'active',
         device: {
           userAgent: navigator.userAgent,
           screenWidth: tabScreen?.width ?? cal?.screenWidth ?? 0,

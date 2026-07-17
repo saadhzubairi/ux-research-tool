@@ -140,11 +140,12 @@ export default function SettingsPage() {
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {sessions.slice(0, 20).map((session) => {
                     let displayUrl = '--'
-                    if (session.pages.length > 0 && session.pages[0]) {
+                    const firstPage = session.pages?.[0]
+                    if (firstPage) {
                       try {
-                        displayUrl = new URL(session.pages[0].url).hostname
+                        displayUrl = new URL(firstPage.url).hostname
                       } catch {
-                        displayUrl = session.pages[0].url
+                        displayUrl = firstPage.url
                       }
                     }
 

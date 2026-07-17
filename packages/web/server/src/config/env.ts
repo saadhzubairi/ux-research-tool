@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 export const config = {
-  mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/gazekit',
+  mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/ismap',
   httpPort: parseInt(process.env.HTTP_PORT || '4444', 10),
   wsPort: parseInt(process.env.WS_PORT || '8765', 10),
   dataDir: process.env.DATA_DIR || './data',

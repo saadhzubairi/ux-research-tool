@@ -7,8 +7,14 @@ import type {
   SessionsQuery,
   Page,
   SliceListItem,
+  SliceGazePoint,
 } from '@gazekit/shared'
 import api from './client'
+
+/** A slice-list item with the raw gaze points included (`?includePoints=true`).
+ *  Heatmaps are built from raw gaze density, so the session-detail view always
+ *  requests points; the aggregate list shape omits them. */
+export type SliceWithPoints = SliceListItem & { gazePoints?: SliceGazePoint[] }
 
 /** Canonical query key for a page's slice list. The live WS hook appends into
  *  the base-range ([null, null]) entry, so the live view MUST use
@@ -102,9 +108,11 @@ export function useSlicesQuery(
     queryKey: slicesQueryKey(sessionId, pageId ?? '', range?.from, range?.to),
     queryFn: () =>
       api
-        .get<ApiResponse<SliceListItem[]>>(
+        .get<ApiResponse<SliceWithPoints[]>>(
           `/api/sessions/${sessionId}/pages/${pageId}/slices`,
-          { params: { from: range?.from, to: range?.to } },
+          // includePoints: the heatmap renders from raw gaze density, not the
+          // (sparse) per-slice fixations, so we need the points on the client.
+          { params: { from: range?.from, to: range?.to, includePoints: true } },
         )
         .then((r) => r.data),
     enabled: !!sessionId && !!pageId,

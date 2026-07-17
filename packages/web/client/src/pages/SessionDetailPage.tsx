@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import type { Page } from '@gazekit/shared'
 import {
   useSessionQuery,
   usePagesQuery,
@@ -107,6 +108,42 @@ export default function SessionDetailPage() {
     return out
   }, [slices, clampedSlice])
 
+  // Cumulative RAW gaze points across slices[0..currentSlice] — this is what
+  // actually forms the heatmap. Per-slice fixations are far too sparse (a slice
+  // is ~100ms / a handful of points, so most windows yield zero fixations), so
+  // the density map is built from raw gaze instead. Each point is projected
+  // into the currently displayed slice's viewport by offsetting for its own
+  // slice's scroll position, so a scrolled session still aligns to the backdrop
+  // screenshot; points that fall outside the viewport are dropped.
+  const cumulativeGazePoints = useMemo(() => {
+    const cur = slices[clampedSlice]?.screenshot
+    const curSx = cur?.scrollX ?? 0
+    const curSy = cur?.scrollY ?? 0
+    const vw = cur?.viewportWidth ?? 0
+    const vh = cur?.viewportHeight ?? 0
+    // Gaze legitimately lands slightly outside the viewport (the tracker keeps
+    // samples within a ~50px slack), so keep a margin rather than clipping edge
+    // heat; the margin still excludes points projected in from a different
+    // scroll position (their offset pushes them far outside).
+    const M = 64
+    const out: Array<{ x: number; y: number; value: number }> = []
+    for (let i = 0; i <= clampedSlice; i++) {
+      const s = slices[i]
+      const pts = s?.gazePoints
+      if (!pts) continue
+      const dx = (s.screenshot?.scrollX ?? 0) - curSx
+      const dy = (s.screenshot?.scrollY ?? 0) - curSy
+      for (const p of pts) {
+        const x = p.x + dx
+        const y = p.y + dy
+        if (vw > 0 && (x < -M || x > vw + M)) continue
+        if (vh > 0 && (y < -M || y > vh + M)) continue
+        out.push({ x, y, value: 1 })
+      }
+    }
+    return out
+  }, [slices, clampedSlice])
+
   const handleDelete = useCallback(() => {
     deleteSession.mutate(sessionId, {
       onSuccess: () => navigate('/sessions'),
@@ -189,7 +226,7 @@ export default function SessionDetailPage() {
         </div>
       </div>
 
-      {activeTab === 'overview' && <OverviewTab session={session} />}
+      {activeTab === 'overview' && <OverviewTab session={session} pages={pages} />}
 
       {activeTab === 'heatmap' && (
         <div>
@@ -217,8 +254,10 @@ export default function SessionDetailPage() {
               {hasSlices && viewport ? (
                 <>
                   <HeatmapCanvas
-                    // Heatmap view: cumulative fixations. Moment view: no heat,
-                    // just the screenshot + the gaze-trail overlay child.
+                    // Heatmap view: raw gaze density (fixations passed too, for
+                    // the "Show Fixations Only" toggle). Moment view: no heat —
+                    // the screenshot + gaze-trail overlay child render instead.
+                    gazePoints={heatmapView === 'heatmap' ? cumulativeGazePoints : []}
                     fixations={heatmapView === 'heatmap' ? cumulativeFixations : []}
                     viewportWidth={viewport.viewportWidth}
                     viewportHeight={viewport.viewportHeight}
@@ -285,7 +324,13 @@ export default function SessionDetailPage() {
   )
 }
 
-function OverviewTab({ session }: { session: NonNullable<ReturnType<typeof useSessionQuery>['data']>['data'] }) {
+function OverviewTab({
+  session,
+  pages,
+}: {
+  session: NonNullable<ReturnType<typeof useSessionQuery>['data']>['data']
+  pages: Page[]
+}) {
   if (!session) return null
 
   const qualityPct = Math.round(session.calibration.qualityScore * 100)
@@ -376,12 +421,12 @@ function OverviewTab({ session }: { session: NonNullable<ReturnType<typeof useSe
       <div className="card">
         <h3 className="card-header">Pages Visited</h3>
         <div className="mt-2 space-y-2">
-          {session.pages.length === 0 ? (
+          {pages.length === 0 ? (
             <p className="text-sm text-surface-500">No pages recorded</p>
           ) : (
-            session.pages.map((page, i) => (
+            pages.map((page, i) => (
               <div
-                key={`${page.url}-${i}`}
+                key={`${page._id}-${i}`}
                 className="flex items-center justify-between py-2 px-3 rounded-2xl bg-accent-50"
               >
                 <div className="flex items-center gap-3 min-w-0">

@@ -1,12 +1,12 @@
 import { useRef, useEffect, useMemo } from 'react'
-import type { SliceListItem, SliceFixation } from '@gazekit/shared'
+import type { SliceListItem, SliceFixation, SliceGazePoint } from '@gazekit/shared'
 
 interface SliceGazeTrailProps {
-  slices: SliceListItem[]
+  slices: Array<SliceListItem & { gazePoints?: SliceGazePoint[] }>
   currentSlice: number
   viewportWidth: number
   viewportHeight: number
-  /** How many trailing slices' fixations to render (default 4). */
+  /** How many trailing slices' gaze points to render (default 4). */
   trailSlices?: number
   /** Draw dwell-scaled fixation circles in addition to the gaze trail. */
   showFixations?: boolean
@@ -32,8 +32,22 @@ export default function SliceGazeTrail({
 }: SliceGazeTrailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Fixations from the trailing window of slices, oldest → newest.
-  const trail = useMemo<SliceFixation[]>(() => {
+  // Raw gaze points from the trailing window of slices, oldest → newest — the
+  // actual moment-by-moment trail (per-slice fixations are far too sparse).
+  const trail = useMemo<Array<{ x: number; y: number }>>(() => {
+    if (slices.length === 0) return []
+    const end = Math.min(Math.max(0, currentSlice), slices.length - 1)
+    const start = Math.max(0, end - (trailSlices - 1))
+    const out: Array<{ x: number; y: number }> = []
+    for (let i = start; i <= end; i++) {
+      const pts = slices[i]?.gazePoints
+      if (pts) for (const p of pts) out.push({ x: p.x, y: p.y })
+    }
+    return out
+  }, [slices, currentSlice, trailSlices])
+
+  // Fixations in the same window — the dwell-scaled circle overlay (opt-in).
+  const fixations = useMemo<SliceFixation[]>(() => {
     if (slices.length === 0) return []
     const end = Math.min(Math.max(0, currentSlice), slices.length - 1)
     const start = Math.max(0, end - (trailSlices - 1))
@@ -118,7 +132,7 @@ export default function SliceGazeTrail({
 
       // Dwell-scaled fixation circles.
       if (showFixations) {
-        for (const f of trail) {
+        for (const f of fixations) {
           const radius = Math.min(30, 8 + f.durationMs / 50)
           ctx.beginPath()
           ctx.arc(toX(f.x), toY(f.y), radius, 0, Math.PI * 2)
@@ -133,7 +147,7 @@ export default function SliceGazeTrail({
     const observer = new ResizeObserver(draw)
     observer.observe(parent)
     return () => observer.disconnect()
-  }, [trail, viewportWidth, viewportHeight, showFixations])
+  }, [trail, fixations, viewportWidth, viewportHeight, showFixations])
 
   return (
     <canvas

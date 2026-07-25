@@ -166,7 +166,7 @@ export function CameraStep({
       <div className="w-[400px] rounded-xl border border-gray-200 bg-white p-4">
         <p className="text-sm font-medium text-gray-700">Screen size (diagonal)</p>
         <p className="mt-0.5 text-xs text-gray-500">
-          Optional — lets GazeKit measure accuracy in visual degrees instead of raw pixels.
+          Optional — lets ismap measure accuracy in visual degrees instead of raw pixels.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {DIAGONAL_PRESETS.map((preset) => (

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "GazeKit — Eye Tracking for UX Research",
+  "name": "ismap — Eye Tracking for UX Research",
   "version": "1.0.0",
   "description": "Webcam-based eye tracking with heatmaps and gaze replay",
   "minimum_chrome_version": "116",

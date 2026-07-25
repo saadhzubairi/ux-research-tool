@@ -1,110 +1,97 @@
 /**
- * Generate placeholder PNG icons from SVG sources.
+ * Generate PNG icons matching the SVG sources in ../icons.
  *
  * Usage:  node scripts/generate-icons.mjs
  *
- * For production, replace these with properly designed assets.
- * This script creates minimal 1-color PNGs so the extension loads
- * without errors during development.
+ * Renders the ismap mark — an indigo rounded square with a concentric
+ * heatmap hotspot — as RGBA PNGs at 16/32/128px, with 4x supersampling
+ * for antialiasing. No dependencies beyond Node's zlib.
  */
 
 import { writeFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { deflateSync } from 'zlib'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const iconsDir = resolve(__dirname, '..', 'icons')
 
-// Minimal valid PNG: 1x1 blue pixel, then scaled via canvas in the browser.
-// These are just enough to satisfy Chrome's icon requirements during dev.
-// Generated with: a valid PNG header + IHDR + IDAT + IEND for a solid blue square.
+const COLORS = {
+  bg: [0x4f, 0x46, 0xe5],      // indigo-600
+  ring: [0x81, 0x8c, 0xf8],    // indigo-400
+  warm: [0xfb, 0xbf, 0x24],    // amber-400
+  hot: [0xf9, 0x73, 0x16],     // orange-500
+}
 
-function createMinimalPng(size) {
-  // We create a very simple uncompressed PNG with a single color.
-  // For development placeholders this is sufficient.
+// Design in unit space (0..1): rounded rect inset ~3%, radius ~22%,
+// hotspot circles at r 0.33 / 0.22 / 0.11 of icon size.
+function sampleColor(u, v) {
+  const inset = 0.03
+  const radius = 0.22
+  // rounded-rect test
+  const x = Math.min(Math.max(u, inset + radius), 1 - inset - radius)
+  const y = Math.min(Math.max(v, inset + radius), 1 - inset - radius)
+  const d = Math.hypot(u - x, v - y)
+  if (d > radius || u < inset || u > 1 - inset || v < inset || v > 1 - inset) return null
 
-  // PNG signature
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  const r = Math.hypot(u - 0.5, v - 0.5)
+  if (r <= 0.11) return COLORS.hot
+  if (r <= 0.22) return COLORS.warm
+  if (r <= 0.33) return COLORS.ring
+  return COLORS.bg
+}
 
-  // IHDR chunk
-  const ihdrData = Buffer.alloc(13)
-  ihdrData.writeUInt32BE(size, 0)   // width
-  ihdrData.writeUInt32BE(size, 4)   // height
-  ihdrData[8] = 8                    // bit depth
-  ihdrData[9] = 2                    // color type: RGB
-  ihdrData[10] = 0                   // compression
-  ihdrData[11] = 0                   // filter
-  ihdrData[12] = 0                   // interlace
+function renderPng(size) {
+  const ss = 4 // supersampling factor
+  const rowSize = 1 + size * 4
+  const raw = Buffer.alloc(rowSize * size)
 
-  const ihdr = createChunk('IHDR', ihdrData)
-
-  // IDAT chunk — raw image data (uncompressed deflate)
-  // Each row: filter byte (0) + RGB pixels
-  const rowSize = 1 + size * 3
-  const rawData = Buffer.alloc(rowSize * size)
-
-  for (let y = 0; y < size; y++) {
-    const rowOffset = y * rowSize
-    rawData[rowOffset] = 0 // filter: None
-    for (let x = 0; x < size; x++) {
-      const px = rowOffset + 1 + x * 3
-      rawData[px] = 37      // R (blue: #2563eb)
-      rawData[px + 1] = 99  // G
-      rawData[px + 2] = 235 // B
+  for (let py = 0; py < size; py++) {
+    const rowOffset = py * rowSize
+    raw[rowOffset] = 0 // filter: None
+    for (let px = 0; px < size; px++) {
+      let rSum = 0, gSum = 0, bSum = 0, aSum = 0
+      for (let sy = 0; sy < ss; sy++) {
+        for (let sx = 0; sx < ss; sx++) {
+          const u = (px + (sx + 0.5) / ss) / size
+          const v = (py + (sy + 0.5) / ss) / size
+          const c = sampleColor(u, v)
+          if (c) {
+            rSum += c[0]; gSum += c[1]; bSum += c[2]; aSum += 255
+          }
+        }
+      }
+      const n = ss * ss
+      const a = aSum / n
+      const off = rowOffset + 1 + px * 4
+      // premultiplied average, un-premultiplied for straight-alpha PNG
+      const scale = a > 0 ? 255 / aSum : 0
+      raw[off] = Math.round(rSum * scale)
+      raw[off + 1] = Math.round(gSum * scale)
+      raw[off + 2] = Math.round(bSum * scale)
+      raw[off + 3] = Math.round(a)
     }
   }
 
-  // Wrap in zlib (deflate with zlib header)
-  const zlibData = deflateRaw(rawData)
-  const idat = createChunk('IDAT', zlibData)
-
-  // IEND chunk
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  const ihdrData = Buffer.alloc(13)
+  ihdrData.writeUInt32BE(size, 0)
+  ihdrData.writeUInt32BE(size, 4)
+  ihdrData[8] = 8  // bit depth
+  ihdrData[9] = 6  // color type: RGBA
+  const ihdr = createChunk('IHDR', ihdrData)
+  const idat = createChunk('IDAT', deflateSync(raw))
   const iend = createChunk('IEND', Buffer.alloc(0))
-
   return Buffer.concat([signature, ihdr, idat, iend])
 }
 
 function createChunk(type, data) {
   const length = Buffer.alloc(4)
   length.writeUInt32BE(data.length, 0)
-
   const typeBuffer = Buffer.from(type, 'ascii')
-  const crcInput = Buffer.concat([typeBuffer, data])
   const crc = Buffer.alloc(4)
-  crc.writeUInt32BE(crc32(crcInput), 0)
-
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0)
   return Buffer.concat([length, typeBuffer, data, crc])
-}
-
-// Simple deflate: store blocks (no compression) with zlib wrapper
-function deflateRaw(data) {
-  // Zlib header: CMF=0x78 (deflate, window 32k), FLG=0x01 (no dict, check bits)
-  const header = Buffer.from([0x78, 0x01])
-
-  // Split into 65535-byte store blocks
-  const blocks = []
-  let offset = 0
-  while (offset < data.length) {
-    const remaining = data.length - offset
-    const blockSize = Math.min(remaining, 65535)
-    const isLast = offset + blockSize >= data.length
-
-    const blockHeader = Buffer.alloc(5)
-    blockHeader[0] = isLast ? 0x01 : 0x00
-    blockHeader.writeUInt16LE(blockSize, 1)
-    blockHeader.writeUInt16LE(blockSize ^ 0xffff, 3)
-
-    blocks.push(blockHeader)
-    blocks.push(data.subarray(offset, offset + blockSize))
-    offset += blockSize
-  }
-
-  // Adler-32 checksum
-  const adler = adler32(data)
-  const checksum = Buffer.alloc(4)
-  checksum.writeUInt32BE(adler, 0)
-
-  return Buffer.concat([header, ...blocks, checksum])
 }
 
 function crc32(buf) {
@@ -118,19 +105,8 @@ function crc32(buf) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-function adler32(buf) {
-  let a = 1
-  let b = 0
-  for (let i = 0; i < buf.length; i++) {
-    a = (a + buf[i]) % 65521
-    b = (b + a) % 65521
-  }
-  return ((b << 16) | a) >>> 0
-}
-
-// Generate icons
 for (const size of [16, 32, 128]) {
-  const png = createMinimalPng(size)
+  const png = renderPng(size)
   const outPath = resolve(iconsDir, `icon${size}.png`)
   writeFileSync(outPath, png)
   console.log(`Created ${outPath} (${png.length} bytes)`)

@@ -69,7 +69,7 @@ export default function SliceTimeline({
     [onCurrentSliceChange],
   )
 
-  // Play/pause auto-advance: one slice per elapsed second, scaled by speed.
+  // Play/pause auto-advance: one slice per 100ms baseline, scaled by speed.
   const togglePlay = useCallback(() => {
     setIsPlaying((playing) => {
       if (playing) {
@@ -91,7 +91,7 @@ export default function SliceTimeline({
           return
         }
         onCurrentSliceChange(cursor)
-      }, 1000 / speed)
+      }, 100 / speed)
       return true
     })
   }, [currentSlice, max, speed, onCurrentSliceChange, clearPlay])

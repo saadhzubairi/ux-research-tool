@@ -4,9 +4,11 @@ interface ProgressBarProps {
   current: number
   total: number
   label?: string
+  /** Hide the raw current/total readout (e.g. when current is milliseconds) */
+  showCount?: boolean
 }
 
-export function ProgressBar({ current, total, label }: ProgressBarProps) {
+export function ProgressBar({ current, total, label, showCount = true }: ProgressBarProps) {
   const percent = total > 0 ? Math.round((current / total) * 100) : 0
 
   return (
@@ -14,9 +16,11 @@ export function ProgressBar({ current, total, label }: ProgressBarProps) {
       {label && (
         <div className="mb-1 flex items-center justify-between">
           <span className="text-sm text-gray-700">{label}</span>
-          <span className="text-sm font-medium text-gray-500">
-            {current}/{total}
-          </span>
+          {showCount && (
+            <span className="text-sm font-medium text-gray-500">
+              {current}/{total}
+            </span>
+          )}
         </div>
       )}
       <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">

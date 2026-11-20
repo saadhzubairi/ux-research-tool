@@ -379,12 +379,12 @@ async function loadGazeModel(): Promise<void> {
   if (isValidGazeModel(data)) {
     gazeModel = data
     console.log(
-      `[GazeKit Offscreen] Gaze model v2 loaded (lambda=${data.lambda}, trainRMSE=${Math.round(data.trainRmsePx)}px)`,
+      `[GazeKit Offscreen] Gaze model v3 loaded (lambda=${data.lambda}, trainRMSE=${Math.round(data.trainRmsePx)}px)`,
     )
   } else {
     gazeModel = null
     console.warn(
-      '[GazeKit Offscreen] No valid v2 calibration model found — recalibration required. No gaze predictions will be produced.',
+      '[GazeKit Offscreen] No valid v3 calibration model found — recalibration required. No gaze predictions will be produced.',
     )
   }
 }
@@ -521,6 +521,13 @@ async function startGazeEngine(): Promise<{ cameraMismatch: boolean }> {
 
   try {
     await loadGazeModel()
+
+    // A session without a valid model records nothing — fail loudly so the
+    // service worker aborts the session instead of running it empty. This
+    // also catches stale pre-v3 calibrations after the pipeline upgrade.
+    if (!gazeModel) {
+      throw new Error('No valid calibration model — please (re)calibrate before tracking')
+    }
 
     // Pin the camera AND capture resolution used at calibration — features
     // are frame-normalized, so a different camera pose or aspect ratio

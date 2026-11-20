@@ -5,10 +5,12 @@ import {
   detectGazeFrame,
   closeFaceLandmarker,
 } from '../../offscreen/faceLandmarker'
-import { BlinkDetector, FEATURE_INDEX, type FrameFeatures } from '../../offscreen/features'
+import { BlinkDetector, type FrameFeatures, type HeadPose } from '../../offscreen/features'
 import {
-  fitGazeModel,
+  fitGazeModelFromSamples,
   predictScreenPx,
+  type CalibrationSample,
+  type CalibrationSampleKind,
   type GazeModel,
 } from '../../offscreen/regression'
 import {
@@ -29,11 +31,17 @@ export interface UseMediaPipeReturn {
   start: (stream: MediaStream) => Promise<void>
   stop: () => void
   /**
-   * Record one calibration sample for the target `pointId` shown at
-   * (clientX, clientY). Returns true when a fresh, blink-free, face-detected
-   * frame was captured.
+   * Record one calibration sample: the user's gaze target is at
+   * (clientX, clientY), tagged with the pursuit-path segment it belongs to.
+   * Returns true when a fresh, blink-free, not-yet-recorded frame was
+   * captured.
    */
-  recordScreenPosition: (clientX: number, clientY: number, pointId: string) => boolean
+  recordCalibrationSample: (
+    clientX: number,
+    clientY: number,
+    group: string,
+    kind: CalibrationSampleKind,
+  ) => boolean
   /** Fit + persistable model. Throws with a user-facing message on failure. */
   exportModel: () => GazeModel
   /** Inject a stored model (playground / re-validation). */
@@ -44,10 +52,13 @@ export interface UseMediaPipeReturn {
 }
 
 interface RecordedSample {
-  pointId: string
+  group: string
+  kind: CalibrationSampleKind
   screenX: number
   screenY: number
   features: number[]
+  headPose: HeadPose
+  interocular: number
 }
 
 function median(values: number[]): number {
@@ -70,6 +81,7 @@ export function useMediaPipe(): UseMediaPipeReturn {
   const predictionRef = useRef<{ x: number; y: number } | null>(null)
   const predictionTsRef = useRef(0)
   const latestFrameRef = useRef<{ frame: FrameFeatures; ts: number; blinking: boolean } | null>(null)
+  const lastRecordedFrameTsRef = useRef(0)
   const samplesRef = useRef<RecordedSample[]>([])
   const modelRef = useRef<GazeModel | null>(null)
   const blinkDetectorRef = useRef(new BlinkDetector())
@@ -176,22 +188,29 @@ export function useMediaPipe(): UseMediaPipeReturn {
     return () => chrome.tabs.onZoomChange.removeListener(listener)
   }, [])
 
-  const recordScreenPosition = useCallback(
-    (clientX: number, clientY: number, pointId: string): boolean => {
+  const recordCalibrationSample = useCallback(
+    (clientX: number, clientY: number, group: string, kind: CalibrationSampleKind): boolean => {
       // Use the latest frame from the prediction loop — do NOT call detectGazeFrame()
       // again, as running two concurrent MediaPipe inferences causes severe lag.
       const latest = latestFrameRef.current
       if (!latest) return false
       if (latest.blinking) return false
       if (performance.now() - latest.ts > SAMPLE_FRESHNESS_MS) return false
+      // The recorder ticks faster than the camera delivers frames — a frame
+      // must contribute at most one sample or duplicates would overweight it
+      if (latest.ts === lastRecordedFrameTsRef.current) return false
+      lastRecordedFrameTsRef.current = latest.ts
 
       const geometry = captureWindowGeometry(window, zoomRef.current)
       const screen = clientToScreen(geometry, clientX, clientY)
       samplesRef.current.push({
-        pointId,
+        group,
+        kind,
         screenX: screen.x,
         screenY: screen.y,
         features: [...latest.frame.features],
+        headPose: { ...latest.frame.headPose },
+        interocular: latest.frame.interocular,
       })
       return true
     },
@@ -199,49 +218,39 @@ export function useMediaPipe(): UseMediaPipeReturn {
   )
 
   const exportModel = useCallback((): GazeModel => {
-    // Group samples by their calibration point id (NOT by rounded screen
-    // coords — a window nudge mid-calibration must not fragment a point)
-    const byPoint = new Map<string, RecordedSample[]>()
-    for (const s of samplesRef.current) {
-      const arr = byPoint.get(s.pointId)
-      if (arr) {
-        arr.push(s)
-      } else {
-        byPoint.set(s.pointId, [s])
-      }
-    }
-
-    // Per point, the label is the median recorded screen position — robust
-    // if the window moved between samples
-    const points = [...byPoint.values()].map((samples) => ({
-      screenX: median(samples.map((s) => s.screenX)),
-      screenY: median(samples.map((s) => s.screenY)),
-      samples: samples.map((s) => s.features),
+    const all = samplesRef.current
+    const calibrationSamples: CalibrationSample[] = all.map((s) => ({
+      screenX: s.screenX,
+      screenY: s.screenY,
+      features: s.features,
+      group: s.group,
+      kind: s.kind,
     }))
 
-    const fit = fitGazeModel(points)
+    const fit = fitGazeModelFromSamples(calibrationSamples)
 
     // Clamp box for runtime predictions, anchored to where calibration
     // actually happened on the (possibly multi-monitor) desktop
     const calibBounds = {
-      left: Math.min(...points.map((p) => p.screenX)),
-      top: Math.min(...points.map((p) => p.screenY)),
-      right: Math.max(...points.map((p) => p.screenX)),
-      bottom: Math.max(...points.map((p) => p.screenY)),
+      left: Math.min(...all.map((s) => s.screenX)),
+      top: Math.min(...all.map((s) => s.screenY)),
+      right: Math.max(...all.map((s) => s.screenX)),
+      bottom: Math.max(...all.map((s) => s.screenY)),
     }
 
-    // Reference head state = median over all recorded samples
-    const all = samplesRef.current
-    const featAt = (s: RecordedSample, i: number): number => s.features[i] as number
+    // Reference head state = median over the stationary dwell samples (the
+    // vor phase deliberately swings the head and must not shift the reference)
+    const dwellSamples = all.filter((s) => s.kind === 'dwell')
+    const refSource = dwellSamples.length >= 10 ? dwellSamples : all
     const refHeadPose = {
-      yaw: median(all.map((s) => featAt(s, FEATURE_INDEX.yaw))),
-      pitch: median(all.map((s) => featAt(s, FEATURE_INDEX.pitch))),
-      roll: median(all.map((s) => featAt(s, FEATURE_INDEX.roll))),
+      yaw: median(refSource.map((s) => s.headPose.yaw)),
+      pitch: median(refSource.map((s) => s.headPose.pitch)),
+      roll: median(refSource.map((s) => s.headPose.roll)),
     }
-    const refInterocular = median(all.map((s) => featAt(s, FEATURE_INDEX.interocular)))
+    const refInterocular = median(refSource.map((s) => s.interocular))
 
     const model: GazeModel = {
-      version: 2,
+      version: 3,
       weightsX: fit.weightsX,
       weightsY: fit.weightsY,
       featMean: fit.featMean,
@@ -255,6 +264,11 @@ export function useMediaPipe(): UseMediaPipeReturn {
       refInterocular,
       cameraDeviceId: cameraDeviceIdRef.current,
       cameraSize: cameraSizeRef.current,
+      fitStats: {
+        usedGroups: fit.usedGroups,
+        usedSamples: fit.usedSamples,
+        prunedSamples: fit.prunedSamples,
+      },
       calibratedAt: new Date().toISOString(),
       validation: null,
     }
@@ -277,6 +291,7 @@ export function useMediaPipe(): UseMediaPipeReturn {
     samplesRef.current = []
     modelRef.current = null
     predictionRef.current = null
+    lastRecordedFrameTsRef.current = 0
     setPrediction(null)
   }, [])
 
@@ -299,6 +314,7 @@ export function useMediaPipe(): UseMediaPipeReturn {
     blinkDetectorRef.current.reset()
     samplesRef.current = []
     modelRef.current = null
+    lastRecordedFrameTsRef.current = 0
   }, [])
 
   useEffect(() => {
@@ -312,7 +328,7 @@ export function useMediaPipe(): UseMediaPipeReturn {
     error,
     start,
     stop,
-    recordScreenPosition,
+    recordCalibrationSample,
     exportModel,
     loadModel,
     getPrediction,

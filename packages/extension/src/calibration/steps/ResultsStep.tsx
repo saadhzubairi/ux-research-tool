@@ -76,7 +76,7 @@ export function ResultsStep({
     savedRef.current = true
 
     const calibration: CalibrationResult = {
-      method: '13-point-ridge',
+      method: 'pursuit-ridge',
       avgErrorPx: Number.isFinite(validation.medianErrorPx) ? validation.medianErrorPx : 999,
       precisionPx: Number.isFinite(validation.precisionPx) ? validation.precisionPx : 999,
       qualityScore: tier === 'good' ? 0.9 : tier === 'usable' ? 0.6 : 0.2,

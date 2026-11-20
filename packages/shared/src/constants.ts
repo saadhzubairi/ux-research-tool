@@ -1,27 +1,9 @@
 export { WS_CONFIG } from './types/protocol'
 
-// 13-point calibration grid. Corners/edges sit near the true screen edges
-// (regression models extrapolate poorly outside the calibrated hull), with an
-// inner ring for coverage of the central reading zone.
-export const CALIBRATION_POINTS = [
-  // Border sweep (clockwise from top-left)
-  { x: 0.06, y: 0.08 },
-  { x: 0.5, y: 0.08 },
-  { x: 0.94, y: 0.08 },
-  { x: 0.94, y: 0.5 },
-  { x: 0.94, y: 0.92 },
-  { x: 0.5, y: 0.92 },
-  { x: 0.06, y: 0.92 },
-  { x: 0.06, y: 0.5 },
-  { x: 0.3, y: 0.28 },
-  { x: 0.7, y: 0.28 },
-  { x: 0.5, y: 0.5 },
-  { x: 0.3, y: 0.72 },
-  { x: 0.7, y: 0.72 },
-]
-
+// Calibration is a continuous smooth-pursuit sweep (see the extension's
+// calibration/pursuitPath.ts) — there is no shared grid of discrete points.
 // Validation covers the corners (where the model is weakest) plus center.
-// None of these coincide with calibration points.
+// None of these coincide with the pursuit path's dwell anchors.
 export const VALIDATION_POINTS = [
   { x: 0.12, y: 0.15 },
   { x: 0.88, y: 0.15 },

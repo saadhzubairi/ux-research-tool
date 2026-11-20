@@ -24,8 +24,8 @@ interface ValidationStepProps {
 
 // The first portion of each point covers the saccade to the target and
 // fixation settling — sampling during it would inflate measured error.
-const SETTLE_MS = 1000
-const SAMPLE_MS = 2500
+const SETTLE_MS = 800
+const SAMPLE_MS = 1700
 const SAMPLE_INTERVAL_MS = 50
 
 function median(values: number[]): number {

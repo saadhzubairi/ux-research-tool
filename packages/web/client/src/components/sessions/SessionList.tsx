@@ -101,28 +101,30 @@ export default function SessionList() {
     })
   }, [selectedIds, deleteSession])
 
-  function sortIcon(field: SortField) {
-    if (sortField !== field) return null
+  const SORT_OPTIONS: Array<{ field: SortField; label: string }> = [
+    { field: 'date', label: 'Date' },
+    { field: 'duration', label: 'Duration' },
+    { field: 'gazePoints', label: 'Gaze points' },
+    { field: 'quality', label: 'Calibration' },
+  ]
+
+  function SortPill({ field, label }: { field: SortField; label: string }) {
+    const active = sortField === field
     return (
-      <span className="ml-1 text-accent-400">
-        {sortDir === 'asc' ? '\u2191' : '\u2193'}
-      </span>
+      <button
+        onClick={() => handleSort(field)}
+        className={active ? 'tab-active' : 'tab'}
+      >
+        {label}
+        {active && (
+          <span className="ml-1">{sortDir === 'asc' ? '\u2191' : '\u2193'}</span>
+        )}
+      </button>
     )
   }
 
-  function SortableHeader({ field, children }: { field: SortField; children: React.ReactNode }) {
-    return (
-      <th
-        className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider cursor-pointer hover:text-accent-600 select-none"
-        onClick={() => handleSort(field)}
-      >
-        <span className="inline-flex items-center">
-          {children}
-          {sortIcon(field)}
-        </span>
-      </th>
-    )
-  }
+  const allSelected =
+    selectedIds.size === filteredSessions.length && filteredSessions.length > 0
 
   if (isLoading) {
     return (
@@ -193,42 +195,29 @@ export default function SessionList() {
         )}
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-accent-50">
-            <tr>
-              <th className="px-4 py-3 w-10">
-                <input
-                  type="checkbox"
-                  checked={selectedIds.size === filteredSessions.length && filteredSessions.length > 0}
-                  onChange={toggleSelectAll}
-                  className="checkbox w-4 h-4"
-                />
-              </th>
-              <SortableHeader field="date">Date</SortableHeader>
-              <SortableHeader field="duration">Duration</SortableHeader>
-              <th className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider">
-                URL(s)
-              </th>
-              <SortableHeader field="gazePoints">Gaze Points</SortableHeader>
-              <SortableHeader field="quality">Calibration</SortableHeader>
-              <th className="px-4 py-3 text-left text-xs font-extrabold text-surface-400 uppercase tracking-wider">
-                Status
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredSessions.map((session: SessionMeta) => (
-              <SessionCard
-                key={session.sessionId}
-                session={session}
-                selected={selectedIds.has(session.sessionId)}
-                onToggleSelect={toggleSelect}
-                onClick={(id) => navigate(`/sessions/${id}`)}
-              />
-            ))}
-          </tbody>
-        </table>
+      {/* sort + select-all toolbar */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs font-extrabold uppercase tracking-wider text-surface-400 mr-1">
+          Sort by
+        </span>
+        {SORT_OPTIONS.map((opt) => (
+          <SortPill key={opt.field} field={opt.field} label={opt.label} />
+        ))}
+        <button onClick={toggleSelectAll} className="btn-ghost ml-auto text-xs">
+          {allSelected ? 'Clear selection' : 'Select all'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {filteredSessions.map((session: SessionMeta) => (
+          <SessionCard
+            key={session.sessionId}
+            session={session}
+            selected={selectedIds.has(session.sessionId)}
+            onToggleSelect={toggleSelect}
+            onClick={(id) => navigate(`/sessions/${id}`)}
+          />
+        ))}
       </div>
 
       <ConfirmDialog

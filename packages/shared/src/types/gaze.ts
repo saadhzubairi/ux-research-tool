@@ -39,7 +39,14 @@ export interface GazeBatch {
 }
 
 export interface CalibrationResult {
-  method: '9-point' | '13-point' | '21-point' | '9-point-dwell' | '6-point-polynomial' | '13-point-ridge'
+  method:
+    | '9-point'
+    | '13-point'
+    | '21-point'
+    | '9-point-dwell'
+    | '6-point-polynomial'
+    | '13-point-ridge'
+    | 'pursuit-ridge'
   avgErrorPx: number
   precisionPx: number
   qualityScore: number

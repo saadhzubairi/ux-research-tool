@@ -18,7 +18,7 @@ const SessionSchema = new Schema({
   },
   calibration: {
     // Keep in sync with CalibrationResult['method'] in @gazekit/shared
-    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell', '6-point-polynomial', '13-point-ridge'] },
+    method: { type: String, enum: ['9-point', '13-point', '21-point', '9-point-dwell', '6-point-polynomial', '13-point-ridge', 'pursuit-ridge'] },
     avgErrorPx: Number,
     precisionPx: Number,
     qualityScore: Number,

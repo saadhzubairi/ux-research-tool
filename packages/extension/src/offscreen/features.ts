@@ -1,13 +1,21 @@
 // ---------------------------------------------------------------------------
-// Gaze feature extraction from MediaPipe FaceLandmarker output.
+// Gaze feature extraction from MediaPipe FaceLandmarker output (v3).
 //
 // All eye landmarks are first canonicalized into a face-attached coordinate
 // frame (origin = midpoint of the outer eye corners, X = corner-to-corner
 // axis, Y from the top-of-head landmark, unit = inter-ocular distance). This
 // removes head translation, scale, and rotation from the iris features, so
 // the calibration mapping does not silently break when the head moves.
-// Head pose (yaw/pitch/roll of that frame) is fed to the regression as
-// separate explicit features.
+// Each eye's iris offset is additionally normalized by that eye's OWN corner
+// distance: under yaw the near eye images larger than the far eye, and
+// per-eye normalization cancels that asymmetry at the source.
+//
+// Head pose comes from the facial transformation matrix — MediaPipe's
+// Procrustes fit of the canonical face model over all 478 landmarks — which
+// is far more stable than the previous 3-landmark estimate. It contributes
+// six explicit features: yaw/pitch/roll plus metric head translation, so the
+// regression can compensate residual head motion directly (the calibration's
+// vor phase supplies the training variation for these).
 //
 // Vertical gaze is the hard axis (eyelids occlude the limbus): it is covered
 // by three complementary cues — canonical iris-Y, eyelid apertures (the lids
@@ -41,10 +49,11 @@ export const LANDMARK_COUNT_REQUIRED = 478
 
 export const FEATURE_NAMES = [
   'irisLx', 'irisLy', 'irisRx', 'irisRy',
+  'vergence',
   'lidGapL', 'lidGapR',
   'yaw', 'pitch', 'roll',
+  'headTx', 'headTy', 'headTz',
   'bsX', 'bsY',
-  'faceX', 'faceY', 'interocular',
   'irisXSq', 'irisYSq', 'irisXY',
 ] as const
 
@@ -66,6 +75,7 @@ export interface FrameFeatures {
   features: number[]
   /** Raw eye aspect ratio (avg both eyes) — blink signal */
   ear: number
+  /** Matrix-derived head pose (same values as the yaw/pitch/roll features) */
   headPose: HeadPose
   /** Eye-corner midpoint in raw normalized frame coords */
   eyeCenter: { x: number; y: number }
@@ -116,6 +126,57 @@ function meanOf(points: Vec3[]): Vec3 {
   return { x: x / n, y: y / n, z: z / n }
 }
 
+// ---------------------------------------------------------------------------
+// Facial transformation matrix decomposition
+// ---------------------------------------------------------------------------
+
+export interface HeadTransform {
+  yaw: number
+  pitch: number
+  roll: number
+  tx: number
+  ty: number
+  tz: number
+}
+
+/**
+ * Decompose a 4x4 rigid transform (flat array of 16) into Euler angles and
+ * translation. The MediaPipe JS API does not document the memory layout of
+ * Matrix.data, so the layout is detected from the structure: a rigid
+ * transform's bottom row is [0,0,0,1] while its translation is essentially
+ * never zero (the head sits tens of cm from the camera) — whichever triple
+ * is closer to zero is the bottom row.
+ *
+ * The exact Euler convention does not matter downstream: the regression only
+ * needs smooth, consistent functions of head orientation (sign flips are
+ * absorbed by learned weights). Returns null for non-finite input.
+ */
+export function decomposeHeadTransform(data: ArrayLike<number>): HeadTransform | null {
+  if (data.length !== 16) return null
+  for (let i = 0; i < 16; i++) {
+    if (!Number.isFinite(data[i] as number)) return null
+  }
+
+  const abs = (i: number): number => Math.abs(data[i] as number)
+  // Column-major: bottom row at 3,7,11 and translation at 12,13,14.
+  // Row-major: the reverse.
+  const columnMajor = abs(3) + abs(7) + abs(11) <= abs(12) + abs(13) + abs(14)
+
+  const R = (row: number, col: number): number =>
+    columnMajor ? (data[col * 4 + row] as number) : (data[row * 4 + col] as number)
+  const t = (row: number): number =>
+    columnMajor ? (data[12 + row] as number) : (data[row * 4 + 3] as number)
+
+  return {
+    pitch: Math.atan2(R(2, 1), R(2, 2)),
+    yaw: Math.atan2(-R(2, 0), Math.hypot(R(2, 1), R(2, 2))),
+    roll: Math.atan2(R(1, 0), R(0, 0)),
+    tx: t(0),
+    ty: t(1),
+    tz: t(2),
+  }
+}
+
 /** Blendshape scores by category name (empty map if blendshapes disabled). */
 export type BlendshapeMap = ReadonlyMap<string, number>
 
@@ -124,14 +185,21 @@ function bs(map: BlendshapeMap, name: string): number {
 }
 
 /**
- * Extract the gaze feature vector from one frame of landmarks.
- * Returns null when the face geometry is degenerate (e.g. landmarks collapsed).
+ * Extract the gaze feature vector from one frame of landmarks plus the
+ * facial transformation matrix (flat 16-element array). Returns null when
+ * the face geometry is degenerate or the matrix is missing/malformed —
+ * features extracted without the matrix would live in a different feature
+ * space than the calibration data.
  */
 export function extractFrameFeatures(
   landmarks: Vec3[],
   blendshapes: BlendshapeMap,
+  transformMatrix: ArrayLike<number> | null | undefined,
 ): FrameFeatures | null {
   if (landmarks.length < LANDMARK_COUNT_REQUIRED) return null
+  if (!transformMatrix) return null
+  const head = decomposeHeadTransform(transformMatrix)
+  if (!head) return null
 
   // Length is guarded above; every LM index is within [0, 478)
   const at = (i: number): Vec3 => landmarks[i] as Vec3
@@ -167,29 +235,33 @@ export function extractFrameFeatures(
     }
   }
 
-  // Head pose: R = [xAxis | yAxis | zAxis] maps face frame -> camera frame.
-  // Standard ZYX Euler decomposition; exact convention doesn't matter, only
-  // that these are smooth, consistent functions of head orientation.
-  const yaw = Math.atan2(-xAxis.z, Math.sqrt(yAxis.z * yAxis.z + zAxis.z * zAxis.z))
-  const pitch = Math.atan2(yAxis.z, zAxis.z)
-  const roll = Math.atan2(xAxis.y, xAxis.x)
-
   // Per-eye iris offsets in the canonical frame, relative to each eye's own
-  // corner midpoint
+  // corner midpoint and normalized by that eye's own corner distance
   const irisLRaw = meanOf(LM.leftIrisBoundary.map(at))
   const irisRRaw = meanOf(LM.rightIrisBoundary.map(at))
-  const leftMidRaw = midpoint(at(LM.leftOuterCorner), at(LM.leftInnerCorner))
-  const rightMidRaw = midpoint(at(LM.rightOuterCorner), at(LM.rightInnerCorner))
 
+  const leftOuter = canon(at(LM.leftOuterCorner))
+  const leftInner = canon(at(LM.leftInnerCorner))
+  const rightOuter = canon(at(LM.rightOuterCorner))
+  const rightInner = canon(at(LM.rightInnerCorner))
+
+  const leftWidth = norm(sub(leftInner, leftOuter))
+  const rightWidth = norm(sub(rightInner, rightOuter))
+  if (leftWidth < 1e-6 || rightWidth < 1e-6) return null
+
+  const leftMid = midpoint(leftOuter, leftInner)
+  const rightMid = midpoint(rightOuter, rightInner)
   const irisL = canon(irisLRaw)
   const irisR = canon(irisRRaw)
-  const leftMid = canon(leftMidRaw)
-  const rightMid = canon(rightMidRaw)
 
-  const irisLx = irisL.x - leftMid.x
-  const irisLy = irisL.y - leftMid.y
-  const irisRx = irisR.x - rightMid.x
-  const irisRy = irisR.y - rightMid.y
+  const irisLx = (irisL.x - leftMid.x) / leftWidth
+  const irisLy = (irisL.y - leftMid.y) / leftWidth
+  const irisRx = (irisR.x - rightMid.x) / rightWidth
+  const irisRy = (irisR.y - rightMid.y) / rightWidth
+
+  // Vergence: the eyes counter-rotate for near/off-axis targets; the L/R
+  // horizontal disparity is an extra depth/eccentricity cue
+  const vergence = irisLx - irisRx
 
   // Eyelid apertures in the canonical frame (features, not normalizers —
   // the lids follow the iris vertically, so aperture is a vertical gaze cue)
@@ -223,10 +295,11 @@ export function extractFrameFeatures(
 
   const features = [
     irisLx, irisLy, irisRx, irisRy,
+    vergence,
     lidGapL, lidGapR,
-    yaw, pitch, roll,
+    head.yaw, head.pitch, head.roll,
+    head.tx, head.ty, head.tz,
     bsX, bsY,
-    eyeCenter.x, eyeCenter.y, interocular,
     ax * ax, ay * ay, ax * ay,
   ]
 
@@ -237,7 +310,7 @@ export function extractFrameFeatures(
   return {
     features,
     ear,
-    headPose: { yaw, pitch, roll },
+    headPose: { yaw: head.yaw, pitch: head.pitch, roll: head.roll },
     eyeCenter: { x: eyeCenter.x, y: eyeCenter.y },
     interocular,
   }

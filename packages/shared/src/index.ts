@@ -39,7 +39,6 @@ export { WS_CONFIG } from './types'
 
 // Constants
 export {
-  CALIBRATION_POINTS,
   VALIDATION_POINTS,
   CALIBRATION_QUALITY,
   CALIBRATION_QUALITY_DEG,

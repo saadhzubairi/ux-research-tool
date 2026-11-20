@@ -25,7 +25,9 @@ export async function initFaceLandmarker(
     // The eyeLook* blendshapes are a learned, roughly head-normalized
     // re-encoding of eye rotation — auxiliary features for the regression
     outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: false,
+    // Whole-face Procrustes head pose (rotation + metric translation) —
+    // the v3 features require it; frames without it are rejected
+    outputFacialTransformationMatrixes: true,
   })
   lastVideoTimestampMs = -1
 }
@@ -63,7 +65,9 @@ export function detectGazeFrame(
     for (const c of categories) blendshapes.set(c.categoryName, c.score)
   }
 
-  const frame = extractFrameFeatures(landmarks, blendshapes)
+  const transformMatrix = result.facialTransformationMatrixes?.[0]?.data ?? null
+
+  const frame = extractFrameFeatures(landmarks, blendshapes, transformMatrix)
   return { faceDetected: true, frame }
 }
 

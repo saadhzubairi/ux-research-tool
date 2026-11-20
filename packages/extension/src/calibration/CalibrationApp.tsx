@@ -4,7 +4,11 @@ import {
   CALIBRATION_QUALITY_DEG,
   derivePhysicalScreen,
 } from '@gazekit/shared'
-import { modelPxPerDeg, type GazeModel } from '../offscreen/regression'
+import {
+  modelPxPerDeg,
+  type CalibrationSampleKind,
+  type GazeModel,
+} from '../offscreen/regression'
 import { useMediaPipe } from './hooks/useMediaPipe'
 import { VideoPreview } from './components/VideoPreview'
 import { CameraStep } from './steps/CameraStep'
@@ -142,8 +146,8 @@ export function CalibrationApp() {
   }, [])
 
   const handleRecordSample = useCallback(
-    (x: number, y: number, pointId: string): boolean =>
-      mediapipe.recordScreenPosition(x, y, pointId),
+    (x: number, y: number, group: string, kind: CalibrationSampleKind): boolean =>
+      mediapipe.recordCalibrationSample(x, y, group, kind),
     [mediapipe]
   )
 
@@ -297,7 +301,11 @@ export function CalibrationApp() {
           <FaceCheckStep faceDetected={mediapipe.faceDetected} onNext={handleFaceCheckNext} />
         )}
         {stage === 'calibration' && (
-          <CalibrationStep onComplete={handleCalibrationComplete} onRecordSample={handleRecordSample} />
+          <CalibrationStep
+            onComplete={handleCalibrationComplete}
+            onRecordSample={handleRecordSample}
+            faceDetected={mediapipe.faceDetected}
+          />
         )}
         {stage === 'validation' && (
           <ValidationStep

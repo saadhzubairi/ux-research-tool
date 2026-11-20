@@ -22,15 +22,22 @@ async function runMigrations(): Promise<void> {
 
   if (collections.length === 0) {
     console.log('Creating time series collection: gazeevents')
-    await db.createCollection('gazeevents', {
-      timeseries: {
-        timeField: 'ts',
-        metaField: 'meta',
-        granularity: 'seconds',
-      },
-      expireAfterSeconds: 86400 * 90,
-    })
-    console.log('Time series collection created')
+    try {
+      await db.createCollection('gazeevents', {
+        timeseries: {
+          timeField: 'ts',
+          metaField: 'meta',
+          granularity: 'seconds',
+        },
+        expireAfterSeconds: 86400 * 90,
+      })
+      console.log('Time series collection created')
+    } catch (err) {
+      // Mongoose's autoCreate for the GazeEvent model can create the
+      // collection between the check above and this call (NamespaceExists).
+      if ((err as { code?: number }).code !== 48) throw err
+      console.log('gazeevents already created by model init')
+    }
   }
 
   const gazeEventsCollection = db.collection('gazeevents')
